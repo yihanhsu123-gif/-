@@ -453,9 +453,12 @@ function MainApp({authMaster,onLogout}){
         ...data.filter(m=>!ORDER_NAMES.includes(m.name))
       ];
       setMasters(sorted);
-      // 預設顯示登入者自己的排班
-      const me=data.find(m=>m.id===authMaster.id)||data.find(m=>m.role==="admin")||data[0];
-      setMaster(me||null);
+      // 預設顯示排班：Hanna 預設看麒，其他人看自己
+      const isHanna=authMaster.name==="Hanna"||authMaster.username==="hanna";
+      const defaultTarget=isHanna
+        ?data.find(m=>m.name==="麒")||data.find(m=>m.id===authMaster.id)||data[0]
+        :data.find(m=>m.id===authMaster.id)||data.find(m=>m.role==="admin")||data[0];
+      setMaster(defaultTarget||null);
       const hw=data.find(m=>m.name==="泓文");
       const zw=data.find(m=>m.name==="哲瑋");
       const defs=[hw,zw].filter(Boolean).map(m=>m.id);
