@@ -401,6 +401,193 @@ function LoginScreen({onLogin}){
   );
 }
 
+
+function PendingBookings({masters, currentMaster, isAdmin, onConfirmed}){
+  const[items,setItems]=React.useState([]);
+  const[loading,setLoading]=React.useState(true);
+  const[lineNames,setLineNames]=React.useState({});
+  const[confirmDialog,setConfirmDialog]=React.useState(null);
+  const[confDate,setConfDate]=React.useState('');
+  const[confTime,setConfTime]=React.useState('');
+  const[saving,setSaving]=React.useState(false);
+  const[copyInfo,setCopyInfo]=React.useState(null);
+  const[copied,setCopied]=React.useState(false);
+
+  const MASTER_IDS={
+    '7ae4e5c5-bfa5-46f6-8a90-a96e8721cea5':'哲瑋老師',
+    'b98e3afb-42d1-4149-b278-12d5493885b1':'泓文老師',
+    '13eebe4e-9cee-45ee-aab9-d5b4cb4e6186':'許老師',
+    'e9021367-64c7-476d-a079-2e8e2475988e':'魏老師',
+  };
+
+  // 許老師/Hanna 看全部，其他看自己
+  const canSeeAll = isAdmin || currentMaster?.username==='qi' || currentMaster?.name==='許老師' || currentMaster?.id==='13eebe4e-9cee-45ee-aab9-d5b4cb4e6186';
+
+  async function load(){
+    setLoading(true);
+    let q=sb.from('bookings').select('*').eq('status','tentative').eq('booking_source','customer_app').order('created_at',{ascending:true});
+    if(!canSeeAll) q=q.eq('master_id',currentMaster.id);
+    const{data}=await q;
+    setItems(data||[]);
+
+    // Load LINE display names from line_bindings by phone
+    const phones=[...new Set((data||[]).map(b=>b.customer_phone).filter(Boolean))];
+    if(phones.length){
+      const{data:bindings}=await sb.from('line_bindings').select('phone,display_name,line_user_id').in('phone',phones);
+      const map={};
+      (bindings||[]).forEach(b=>{if(b.phone)map[b.phone]={name:b.display_name,uid:b.line_user_id};});
+      setLineNames(map);
+    }
+    setLoading(false);
+  }
+
+  React.useEffect(()=>{load();},[]);
+
+  function openLineChat(phone){
+    const info=lineNames[phone];
+    if(!info?.uid){alert('找不到此客人的 LINE 帳號');return;}
+    // Open LINE official account manager chat with this user
+    window.open(`https://chat.line.biz/Cce03e1614a3b35b1/chat/${info.uid}`,'_blank');
+  }
+
+  async function confirmBooking(){
+    if(!confirmDialog)return;
+    const isReq=!confirmDialog.date;
+    if(isReq&&(!confDate||!confTime)){alert('請填入日期和時段');return;}
+    setSaving(true);
+    const update={status:'confirmed'};
+    if(isReq){
+      update.date=confDate;
+      update.start_time=confTime+':00';
+    }
+    await sb.from('bookings').update(update).eq('id',confirmDialog.id);
+
+
+    const lineInfo=lineNames[confirmDialog.customer_phone]||{};
+    const copyText=`${confirmDialog.customer_name}${confirmDialog.customer_phone||''}`;
+    const lineUid=lineInfo.uid||null;
+
+    setItems(p=>p.filter(x=>x.id!==confirmDialog.id));
+    setConfirmDialog(null);
+    setConfDate('');setConfTime('');
+    setSaving(false);
+    if(onConfirmed) onConfirmed();
+
+    // 顯示複製畫面
+    setCopyInfo({text:copyText, uid:lineUid});
+  }
+
+  async function reject(item){
+    if(!window.confirm(`確定拒絕 ${item.customer_name} 的預約嗎？`))return;
+    await sb.from('bookings').update({status:'cancelled'}).eq('id',item.id);
+    setItems(p=>p.filter(x=>x.id!==item.id));
+  }
+
+  const wk=['日','一','二','三','四','五','六'];
+  const TIMES=[];
+  for(let h=9;h<=21;h++){if(h===9)TIMES.push('09:30');else{TIMES.push(String(h).padStart(2,'0')+':00');if(h<21)TIMES.push(String(h).padStart(2,'0')+':30');}}
+  TIMES.push('21:00');TIMES.push('21:30');
+
+  if(loading)return<div style={{padding:40,textAlign:'center',color:'#8b949e'}}>載入中...</div>;
+  if(!items.length)return<div style={{padding:40,textAlign:'center',color:'#8b949e',fontSize:14}}>✅ 目前沒有待確認的預約</div>;
+
+  return<div style={{flex:1,overflow:'auto',padding:'12px 14px',maxWidth:480,margin:'0 auto'}}>
+    {items.map(b=>{
+      const d=b.date?new Date(b.date):null;
+      const timeStr=b.start_time?b.start_time.slice(0,5):'待定';
+      const lineInfo=lineNames[b.customer_phone]||{};
+      const isReq=!b.date;
+      return<div key={b.id} style={{background:'#161b22',border:'1px solid #30363d',borderRadius:12,padding:'14px 16px',marginBottom:10}}>
+        <div style={{display:'flex',alignItems:'flex-start',gap:12}}>
+          <div style={{background:'#0d1117',borderRadius:8,padding:'8px 10px',textAlign:'center',minWidth:52,flexShrink:0}}>
+            <div style={{fontSize:10,color:'#8b949e'}}>{d?`${d.getMonth()+1}月`:'待'}</div>
+            <div style={{fontSize:20,fontWeight:900,lineHeight:1.1}}>{d?d.getDate():'?'}</div>
+            <div style={{fontSize:10,color:'#8b949e'}}>{d?`週${wk[d.getDay()]}`:''}</div>
+          </div>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4,flexWrap:'wrap'}}>
+              <span style={{fontSize:16,fontWeight:700,color:'#00e5e5'}}>{timeStr}</span>
+              <span style={{fontSize:11,padding:'2px 8px',borderRadius:10,background:'rgba(255,179,0,.15)',color:'#ffb300'}}>{isReq?'申請制':'待確認'}</span>
+              <span style={{fontSize:11,padding:'2px 8px',borderRadius:10,background:'rgba(116,185,255,.12)',color:'#74b9ff'}}>{MASTER_IDS[b.master_id]||''}</span>
+            </div>
+            <div style={{fontSize:15,fontWeight:700,marginBottom:2}}>{b.customer_name}</div>
+            {lineInfo.name&&<div style={{fontSize:12,color:'#00e5e5',marginBottom:2}}>💬 LINE：{lineInfo.name}</div>}
+            <div style={{fontSize:12,color:'#8b949e',marginBottom:2}}>📞 {b.customer_phone||'未留電話'}</div>
+            {b.note&&<div style={{fontSize:12,color:'#8b949e',marginTop:4,background:'#0d1117',borderRadius:6,padding:'6px 8px',lineHeight:1.6}}>{b.note}</div>}
+          </div>
+        </div>
+        <div style={{display:'flex',gap:8,marginTop:12}}>
+          {b.customer_phone&&lineInfo.uid&&<button onClick={()=>openLineChat(b.customer_phone)}
+            style={{flex:1,padding:'9px',borderRadius:8,background:'#06c755',border:'none',color:'#fff',fontSize:13,fontWeight:700,cursor:'pointer'}}>
+            💬 LINE聯絡
+          </button>}
+          <button onClick={()=>{setConfirmDialog(b);setConfDate(b.date||'');setConfTime(b.start_time?b.start_time.slice(0,5):'');}}
+            style={{flex:2,padding:'9px',borderRadius:8,background:'#00e5e5',border:'none',color:'#000',fontSize:13,fontWeight:700,cursor:'pointer'}}>
+            ✓ 確認預約
+          </button>
+          <button onClick={()=>reject(b)}
+            style={{flex:1,padding:'9px',borderRadius:8,background:'none',border:'1.5px solid #e94560',color:'#e94560',fontSize:13,fontWeight:700,cursor:'pointer'}}>
+            ✗ 拒絕
+          </button>
+        </div>
+      </div>;
+    })}
+
+    {copyInfo&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:999,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={()=>{setCopyInfo(null);setCopied(false);}}>
+      <div style={{background:'#161b22',borderRadius:'20px 20px 0 0',padding:'20px 18px 40px',width:'100%',maxWidth:480}} onClick={e=>e.stopPropagation()}>
+        <div style={{width:36,height:4,background:'#30363d',borderRadius:2,margin:'0 auto 16px'}}></div>
+        <div style={{fontSize:17,fontWeight:900,marginBottom:8}}>✅ 預約已確認！</div>
+        <div style={{fontSize:13,color:'#8b949e',marginBottom:16}}>請複製客人資訊後，到 LINE 改備註名稱</div>
+        <div style={{background:'#0d1117',border:'1.5px solid #30363d',borderRadius:10,padding:'14px',marginBottom:14,fontSize:16,fontWeight:700,letterSpacing:1,textAlign:'center'}}>
+          {copyInfo.text}
+        </div>
+        <button onClick={()=>{navigator.clipboard.writeText(copyInfo.text);setCopied(true);}}
+          style={{width:'100%',padding:14,borderRadius:12,background:copied?'#30363d':'#00e5e5',border:'none',color:copied?'#8b949e':'#000',fontSize:15,fontWeight:900,cursor:'pointer',marginBottom:10}}>
+          {copied?'✓ 已複製':'📋 複製'}
+        </button>
+        {copyInfo.uid&&<button onClick={()=>window.open(`https://chat.line.biz/@232hdfpl/chat/${copyInfo.uid}`,'_blank')}
+          style={{width:'100%',padding:14,borderRadius:12,background:'#06c755',border:'none',color:'#fff',fontSize:15,fontWeight:900,cursor:'pointer',marginBottom:10}}>
+          💬 前往 LINE 對話
+        </button>}
+        <button onClick={()=>{setCopyInfo(null);setCopied(false);}}
+          style={{width:'100%',padding:12,borderRadius:12,background:'none',border:'1.5px solid #30363d',color:'#8b949e',fontSize:14,cursor:'pointer'}}>
+          關閉
+        </button>
+      </div>
+    </div>}
+
+    {confirmDialog&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:999,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={()=>setConfirmDialog(null)}>
+      <div style={{background:'#161b22',borderRadius:'20px 20px 0 0',padding:'20px 18px 40px',width:'100%',maxWidth:480}} onClick={e=>e.stopPropagation()}>
+        <div style={{width:36,height:4,background:'#30363d',borderRadius:2,margin:'0 auto 16px'}}></div>
+        <div style={{fontSize:17,fontWeight:900,marginBottom:16}}>確認預約 - {confirmDialog.customer_name}</div>
+        {!confirmDialog.date&&<div style={{background:'rgba(255,179,0,.1)',border:'1px solid rgba(255,179,0,.3)',borderRadius:8,padding:'10px 12px',marginBottom:14,fontSize:13,color:'#ffb300'}}>
+          ⚡ 申請制預約，請填入與客人確認的時間
+        </div>}
+        <div style={{marginBottom:12}}>
+          <div style={{fontSize:12,color:'#8b949e',marginBottom:5,fontWeight:700}}>日期</div>
+          <input type="date" value={confDate} onChange={e=>setConfDate(e.target.value)}
+            style={{width:'100%',background:'#0d1117',border:'1.5px solid #30363d',borderRadius:8,padding:'11px 12px',color:'#f0f6fc',fontSize:15,outline:'none'}}/>
+        </div>
+        <div style={{marginBottom:16}}>
+          <div style={{fontSize:12,color:'#8b949e',marginBottom:5,fontWeight:700}}>時段</div>
+          <select value={confTime} onChange={e=>setConfTime(e.target.value)}
+            style={{width:'100%',background:'#0d1117',border:'1.5px solid #30363d',borderRadius:8,padding:'11px 12px',color:'#f0f6fc',fontSize:15,outline:'none'}}>
+            <option value="">選擇時段</option>
+            {[...new Set(TIMES)].sort().map(t=><option key={t} value={t}>{t}</option>)}
+          </select>
+        </div>
+        <div style={{display:'flex',gap:10}}>
+          <button onClick={()=>setConfirmDialog(null)} style={{flex:1,padding:14,borderRadius:12,background:'none',border:'1.5px solid #30363d',color:'#f0f6fc',fontSize:15,fontWeight:700,cursor:'pointer'}}>取消</button>
+          <button onClick={confirmBooking} disabled={saving}
+            style={{flex:2,padding:14,borderRadius:12,background:saving?'#30363d':'#00e5e5',border:'none',color:saving?'#8b949e':'#000',fontSize:15,fontWeight:900,cursor:saving?'wait':'pointer'}}>
+            {saving?'處理中...':'確認填入排班'}
+          </button>
+        </div>
+      </div>
+    </div>}
+  </div>;
+}
+
 function App(){
   const today=getTaipeiNow();
   const isMobile=window.innerWidth<=768;
@@ -473,6 +660,15 @@ function MainApp({authMaster,onLogout}){
   const[bookings,setBookings]=useState({});
   const[loading,setLoading]=useState(false);
   const[tab,setTab]=useState("schedule");
+  const[pendingCount,setPendingCount]=React.useState(0);
+
+  async function loadPendingCount(){
+    let q=sb.from('bookings').select('*',{count:'exact',head:true}).eq('status','tentative').eq('booking_source','customer_app');
+    const isAdminUser=(loginMaster||master)?.role==='admin'||(loginMaster||master)?.role==='editor';
+    if(!isAdminUser&&master) q=q.eq('master_id',master.id);
+    const{count}=await q;
+    setPendingCount(count||0);
+  }
   const[crmKey,setCrmKey]=useState(0);
   const[ovMasters,setOvMasters]=useState([]);
   const[view,setView]=useState("month");
@@ -1009,8 +1205,8 @@ function MainApp({authMaster,onLogout}){
 
     {/* Nav */}
     <div style={{display:"flex",background:"var(--bg-header)",borderBottom:"1px solid var(--border2)",overflowX:"auto",flexShrink:0}}>
-      {[["schedule","📅 排班"],["overview","🗓 全覽"],...(canViewCRM?[["crm","👥 客戶"]]:[]),["analytics","📊 數據"],...(isAdmin?[["settings","⚙️ 設定"]]:[])].map(([k,l])=>(
-        <button key={k} className={`tab-btn${tab===k?" active":""}`} onClick={()=>{setTab(k);if(k==="crm")setCrmKey(p=>p+1);}}>{l}</button>
+      {[["schedule","📅 排班"],["overview","🗓 全覽"],...(canViewCRM?[["crm","👥 客戶"]]:[]),["analytics","📊 數據"],["pending",`📋 待確認${pendingCount>0?` (${pendingCount})`:""}`],...(isAdmin?[["settings","⚙️ 設定"]]:[])].map(([k,l])=>(
+        <button key={k} className={`tab-btn${tab===k?" active":""}`} onClick={()=>{setTab(k);if(k==="crm")setCrmKey(p=>p+1);if(k==="pending")loadPendingCount();}}>{l}</button>
       ))}
     </div>
 
@@ -1190,6 +1386,7 @@ function MainApp({authMaster,onLogout}){
     {tab==="crm"&&canViewCRM&&<CRMModule key={crmKey} masters={masters} FS={FS} />}
     {tab==="analytics"&&<AnalyticsModule masters={masters} FS={FS} currentMaster={master} />}
     {tab==="settings"&&isAdmin&&<SettingsModule masters={masters} setMasters={setMasters} FS={FS} msg={msg} />}
+    {tab==="pending"&&<PendingBookings masters={masters} currentMaster={loginMaster||master} isAdmin={isAdmin} onConfirmed={()=>{loadBk();loadPendingCount();}} />}
 
     {/* Dialog */}
     {cellHistory&&<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.8)",display:"flex",alignItems:"flex-end",justifyContent:"center",zIndex:100}} onClick={()=>setCellHistory(null)}>
