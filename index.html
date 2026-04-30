@@ -588,6 +588,57 @@ function PendingBookings({masters, currentMaster, isAdmin, onConfirmed}){
   </div>;
 }
 
+
+function SplitMasterSelect({masters, dialogMasterId, dateStr, time, value, onChange}){
+  const[avail,setAvail]=React.useState({});
+
+  React.useEffect(()=>{
+    if(!dateStr||!time) return;
+    const filtered=masters.filter(m=>m.id!==dialogMasterId&&m.name!=="Hanna"&&m.username!=="hanna");
+    filtered.forEach(async m=>{
+      const{data}=await sb.from("bookings")
+        .select("id,customer_name")
+        .eq("master_id",m.id)
+        .eq("date",dateStr)
+        .eq("start_time",time+":00")
+        .neq("status","cancelled")
+        .neq("color_tag","vacation")
+        .limit(1);
+      setAvail(prev=>({...prev,[m.id]:data&&data.length>0?data[0].customer_name:null}));
+    });
+  },[dialogMasterId,dateStr,time]);
+
+  const filtered=masters.filter(m=>m.id!==dialogMasterId&&m.name!=="Hanna"&&m.username!=="hanna");
+
+  return<div style={{marginTop:6}}>
+    {filtered.map(m=>{
+      const conflict=avail[m.id];
+      const isSelected=value===m.id;
+      const hasConflict=conflict!==undefined&&conflict!==null;
+      return<div key={m.id} onClick={()=>onChange(m.id)}
+        style={{
+          display:"flex",alignItems:"center",gap:10,padding:"10px 12px",
+          borderRadius:8,marginBottom:6,cursor:"pointer",
+          background:isSelected?"rgba(116,185,255,0.15)":"var(--input-bg)",
+          border:`1.5px solid ${isSelected?"#74b9ff":hasConflict?"rgba(233,69,96,0.4)":"var(--border2)"}`,
+          transition:".15s"
+        }}>
+        <div style={{
+          width:10,height:10,borderRadius:"50%",flexShrink:0,
+          background:avail[m.id]===undefined?"#555":hasConflict?"#e94560":"#00b894"
+        }}/>
+        <div style={{flex:1}}>
+          <div style={{fontSize:13,fontWeight:700,color:isSelected?"#74b9ff":"var(--text-main)"}}>{m.name}</div>
+          {hasConflict&&<div style={{fontSize:11,color:"#e94560",marginTop:1}}>已有：{conflict}</div>}
+          {!hasConflict&&avail[m.id]!==undefined&&<div style={{fontSize:11,color:"#00b894",marginTop:1}}>空位</div>}
+          {avail[m.id]===undefined&&<div style={{fontSize:11,color:"#555",marginTop:1}}>查詢中...</div>}
+        </div>
+        {isSelected&&<span style={{color:"#74b9ff",fontSize:14}}>✓</span>}
+      </div>;
+    })}
+  </div>;
+}
+
 function App(){
   const today=getTaipeiNow();
   const isMobile=window.innerWidth<=768;
@@ -1476,10 +1527,14 @@ function MainApp({authMaster,onLogout}){
             <input type="checkbox" checked={form.isSplit} onChange={e=>setForm(f=>({...f,isSplit:e.target.checked,splitMasterId:f.splitMasterId||masters.find(m=>m.id!==dialog.masterId)?.id||""}))} style={{width:16,height:16}} />
             同行者拆單給另一師傅
           </label>
-          {form.isSplit&&<select value={form.splitMasterId} onChange={e=>setForm(f=>({...f,splitMasterId:e.target.value}))} style={{width:"100%",marginTop:6,background:"var(--input-bg)",border:"1px solid var(--border2)",borderRadius:6,padding:6,color:"var(--text-main)"}}>
-            <option value="">請選擇...</option>
-            {masters.filter(m=>m.id!==dialog.masterId&&m.name!=="Hanna"&&m.username!=="hanna").map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
-          </select>}
+          {form.isSplit&&<SplitMasterSelect
+            masters={masters}
+            dialogMasterId={dialog.masterId}
+            dateStr={dialog.dateStr}
+            time={dialog.time}
+            value={form.splitMasterId}
+            onChange={id=>setForm(f=>({...f,splitMasterId:id}))}
+          />}
         </div>}
         <div style={{marginBottom:10}}>
           <div style={{fontSize:11,color:"var(--text-muted)",marginBottom:6}}>標記</div>
@@ -2399,10 +2454,14 @@ function OverviewMonth({masters,ovMasters,setOvMasters,FS,ovColW,setOvColW,ovRow
             <input type="checkbox" checked={form.isSplit} onChange={e=>setForm(f=>({...f,isSplit:e.target.checked,splitMasterId:f.splitMasterId||masters.find(m=>m.id!==dialog.masterId&&m.name!=="Hanna"&&m.username!=="hanna")?.id||""}))} style={{width:16,height:16}} />
             同行者拆單給另一師傅
           </label>
-          {form.isSplit&&<select value={form.splitMasterId} onChange={e=>setForm(f=>({...f,splitMasterId:e.target.value}))} style={{width:"100%",marginTop:6,background:"var(--input-bg)",border:"1px solid var(--border2)",borderRadius:6,padding:6,color:"var(--text-main)"}}>
-            <option value="">請選擇...</option>
-            {masters.filter(m=>m.id!==dialog.masterId&&m.name!=="Hanna"&&m.username!=="hanna").map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
-          </select>}
+          {form.isSplit&&<SplitMasterSelect
+            masters={masters}
+            dialogMasterId={dialog.masterId}
+            dateStr={dialog.dateStr}
+            time={dialog.time}
+            value={form.splitMasterId}
+            onChange={id=>setForm(f=>({...f,splitMasterId:id}))}
+          />}
         </div>}
         <div style={{marginBottom:10}}>
           <div style={{fontSize:11,color:"var(--text-muted)",marginBottom:6}}>標記</div>
@@ -2561,6 +2620,8 @@ function CRMModule({masters,FS}){
     setNoShowBks(ns.filter(b=>b.customer_name&&b.customer_name!=="休假"));
   };
 
+  const[lineBindings,setLineBindings]=useState({});
+
   useEffect(()=>{
     setLoading(true);
     const fetchAll=async()=>{
@@ -2574,6 +2635,11 @@ function CRMModule({masters,FS}){
       }
       setBks(all.filter(b=>b.customer_name&&b.customer_name.trim()&&b.customer_name!=="休假"&&/[\u4e00-\u9fa5a-zA-Z0-9]/.test(b.customer_name)));
       await reloadNoShow();
+      // Load LINE bindings
+      const{data:lb}=await sb.from("line_bindings").select("phone,display_name,line_user_id");
+      const lmap={};
+      (lb||[]).forEach(b=>{if(b.phone)lmap[b.phone]={displayName:b.display_name,lineUserId:b.line_user_id};});
+      setLineBindings(lmap);
       setLoading(false);
     };
     fetchAll();
@@ -2751,6 +2817,37 @@ function CRMModule({masters,FS}){
                   </div>
                 )}
                 <div style={{fontSize:13,color:"var(--text-muted)"}}>📞 {sel.phone||(()=>{const pm=sel.bks.map(b=>b.customer_phone||parseInput(b.customer_name||"").phone).find(p=>p);return pm||"未留電話";})()}</div>
+                {(()=>{
+                  const phone=sel.phone;
+                  const lb=lineBindings[phone];
+                  if(!lb) return null;
+                  const lineName=lb.displayName;
+                  const isDiff=lineName&&lineName!==sel.name&&!sel.name.includes(lineName)&&!lineName.includes(sel.name);
+                  return<div style={{marginTop:6}}>
+                    <div style={{fontSize:12,color:"#22d3ee",display:"flex",alignItems:"center",gap:6}}>
+                      💬 LINE：{lineName||"已綁定（無名稱）"}
+                    </div>
+                    {isDiff&&<div style={{marginTop:6,background:"rgba(245,166,35,0.12)",border:"1px solid rgba(245,166,35,0.35)",borderRadius:8,padding:"8px 10px"}}>
+                      <div style={{fontSize:11,color:"#f5a623",fontWeight:700,marginBottom:6}}>⚠️ LINE名稱「{lineName}」與登記名「{sel.name}」不同</div>
+                      <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                        <button onClick={async()=>{
+                          const ids=sel.bks.map(b=>b.id);
+                          for(let i=0;i<ids.length;i+=100){
+                            await sb.from("bookings").update({customer_name:lineName}).in("id",ids.slice(i,i+100));
+                          }
+                          setSel(prev=>({...prev,name:lineName,bks:prev.bks.map(b=>({...b,customer_name:lineName}))}));
+                          setBks(prev=>prev.map(b=>ids.includes(b.id)?{...b,customer_name:lineName}:b));
+                          msgCrm("✅ 已改為 LINE 名稱："+lineName);
+                        }} style={{fontSize:11,padding:"4px 10px",borderRadius:7,background:"rgba(34,211,238,0.15)",border:"1px solid rgba(34,211,238,0.4)",color:"#22d3ee",cursor:"pointer"}}>
+                          用 LINE 名稱「{lineName}」
+                        </button>
+                        <button onClick={()=>{setRenameNew(lineName);setRenameModal(true);}} style={{fontSize:11,padding:"4px 10px",borderRadius:7,background:"rgba(116,185,255,0.1)",border:"1px solid rgba(116,185,255,0.3)",color:"#74b9ff",cursor:"pointer"}}>
+                          ✏️ 自訂名稱
+                        </button>
+                      </div>
+                    </div>}
+                  </div>;
+                })()}
                 <div style={{fontSize:12,color:"var(--text-dim)",marginTop:3}}>師傅：{sel.masterName}</div>
               </div>
               <div style={{textAlign:"right",flexShrink:0,marginLeft:10}}>
