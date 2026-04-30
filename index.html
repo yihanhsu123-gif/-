@@ -1475,7 +1475,21 @@ function MainApp({authMaster,onLogout}){
         </div>
         <div style={{marginBottom:10,position:"relative"}}>
           <div style={{fontSize:11,color:"var(--text-muted)",marginBottom:4}}>姓名＋電話</div>
-          <input autoFocus value={form.input} onChange={e=>{setForm(f=>({...f,input:e.target.value}));}} onKeyDown={e=>{if(e.key==="Enter"&&!acShow)saveBk();if(e.key==="Escape")acDismiss();}} placeholder={COLOR_NO_INPUT.has(form.color)?"（選填）輸入客戶姓名...":"許小姐0978822100"} style={{width:"100%",background:COLOR_NO_INPUT.has(form.color)&&!form.input.trim()?`${{"reserved":"rgba(34,211,238,0.10)","custom":"rgba(162,155,254,0.10)","vacation":"rgba(233,69,96,0.10)"}[form.color]||"var(--input-bg)"}`:  "var(--input-bg)",border:`1px solid ${COLOR_NO_INPUT.has(form.color)&&!form.input.trim()?{"reserved":"#22d3ee88","custom":"#a29bfe88","vacation":"#e9456088"}[form.color]||"var(--border2)":"var(--border2)"}`,borderRadius:8,padding:"8px 11px",color:"var(--text-main)",transition:"all 0.2s"}} />
+          <input autoFocus value={form.input} onChange={e=>{const v=e.target.value;
+  let newColor=f=>f.color==="reserved"&&v.trim()?"none":f.color;
+  setForm(f=>({...f,input:v,color:newColor(f)}));
+  // Auto-detect new customer when phone is entered
+  const parsed=parseInput(v);
+  if(parsed.phone&&parsed.phone.length>=8){
+    sb.from("bookings").select("id",{count:"exact",head:true})
+      .eq("customer_phone",parsed.phone)
+      .neq("status","cancelled")
+      .neq("color_tag","vacation")
+      .then(({count})=>{
+        if(count===0) setForm(f=>({...f,color:"new_customer"}));
+      }).catch(()=>{});
+  }
+}} onKeyDown={e=>{if(e.key==="Enter"&&!acShow)saveBk();if(e.key==="Escape")acDismiss();}} placeholder={COLOR_NO_INPUT.has(form.color)?"（選填）輸入客戶姓名...":"許小姐0978822100"} style={{width:"100%",background:COLOR_NO_INPUT.has(form.color)&&!form.input.trim()?`${{"reserved":"rgba(34,211,238,0.10)","custom":"rgba(162,155,254,0.10)","vacation":"rgba(233,69,96,0.10)"}[form.color]||"var(--input-bg)"}`:  "var(--input-bg)",border:`1px solid ${COLOR_NO_INPUT.has(form.color)&&!form.input.trim()?{"reserved":"#22d3ee88","custom":"#a29bfe88","vacation":"#e9456088"}[form.color]||"var(--border2)":"var(--border2)"}`,borderRadius:8,padding:"8px 11px",color:"var(--text-main)",transition:"all 0.2s"}} />
           {acShow&&acSug.length>0&&<div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:999,background:"var(--bg-header)",border:"1px solid var(--border2)",borderRadius:10,marginTop:3,boxShadow:"0 6px 20px rgba(0,0,0,0.4)",overflow:"hidden"}}>
             {acSug.map((c,i)=>{
               const isOwn=c._masterId&&c._masterId===(dialog?.masterId||master?.id);
@@ -2403,7 +2417,21 @@ function OverviewMonth({masters,ovMasters,setOvMasters,FS,ovColW,setOvColW,ovRow
         </div>
         <div style={{marginBottom:10,position:"relative"}}>
           <div style={{fontSize:11,color:"var(--text-muted)",marginBottom:4}}>姓名＋電話</div>
-          <input autoFocus value={form.input} onChange={e=>{setForm(f=>({...f,input:e.target.value}));}} onKeyDown={e=>{if(e.key==="Enter"&&!acShow)saveBk();if(e.key==="Escape")acDismiss();}} placeholder={COLOR_NO_INPUT.has(form.color)?"（選填）輸入客戶姓名...":"許小姐0978822100"} style={{width:"100%",background:COLOR_NO_INPUT.has(form.color)&&!form.input.trim()?{"reserved":"rgba(34,211,238,0.10)","custom":"rgba(162,155,254,0.10)","vacation":"rgba(233,69,96,0.10)"}[form.color]||"var(--input-bg)":"var(--input-bg)",border:`1px solid ${COLOR_NO_INPUT.has(form.color)&&!form.input.trim()?{"reserved":"#22d3ee88","custom":"#a29bfe88","vacation":"#e9456088"}[form.color]||"var(--border2)":"var(--border2)"}`,borderRadius:8,padding:"8px 11px",color:"var(--text-main)",transition:"all 0.2s"}} />
+          <input autoFocus value={form.input} onChange={e=>{const v=e.target.value;
+  let newColor=f=>f.color==="reserved"&&v.trim()?"none":f.color;
+  setForm(f=>({...f,input:v,color:newColor(f)}));
+  // Auto-detect new customer when phone is entered
+  const parsed=parseInput(v);
+  if(parsed.phone&&parsed.phone.length>=8){
+    sb.from("bookings").select("id",{count:"exact",head:true})
+      .eq("customer_phone",parsed.phone)
+      .neq("status","cancelled")
+      .neq("color_tag","vacation")
+      .then(({count})=>{
+        if(count===0) setForm(f=>({...f,color:"new_customer"}));
+      }).catch(()=>{});
+  }
+}} onKeyDown={e=>{if(e.key==="Enter"&&!acShow)saveBk();if(e.key==="Escape")acDismiss();}} placeholder={COLOR_NO_INPUT.has(form.color)?"（選填）輸入客戶姓名...":"許小姐0978822100"} style={{width:"100%",background:COLOR_NO_INPUT.has(form.color)&&!form.input.trim()?{"reserved":"rgba(34,211,238,0.10)","custom":"rgba(162,155,254,0.10)","vacation":"rgba(233,69,96,0.10)"}[form.color]||"var(--input-bg)":"var(--input-bg)",border:`1px solid ${COLOR_NO_INPUT.has(form.color)&&!form.input.trim()?{"reserved":"#22d3ee88","custom":"#a29bfe88","vacation":"#e9456088"}[form.color]||"var(--border2)":"var(--border2)"}`,borderRadius:8,padding:"8px 11px",color:"var(--text-main)",transition:"all 0.2s"}} />
           {acShow&&acSug.length>0&&<div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:999,background:"var(--bg-header)",border:"1px solid var(--border2)",borderRadius:10,marginTop:3,boxShadow:"0 6px 20px rgba(0,0,0,0.4)",overflow:"hidden"}}>
             {acSug.map((c,i)=>{
               const isOwn=c._masterId&&c._masterId===dialog?.masterId;
