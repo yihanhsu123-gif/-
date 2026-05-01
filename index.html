@@ -148,6 +148,85 @@ function getTaipeiNow(){const t=new Date();const s=t.toLocaleString("en-US",{tim
 function getTaipeiDateStr(){const t=getTaipeiNow();return `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,"0")}-${String(t.getDate()).padStart(2,"0")}`;}
 
 function fmtDate(y,m,d){return `${y}-${String(m+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;}
+
+// 計算重複預約的所有日期
+// startDateStr: "YYYY-MM-DD"
+// recurType: "weekly" | "biweekly" | "monthly" (= 每月第N個週幾)
+// endType: "count" | "date"
+// endValue: count(數字) 或 date("YYYY-MM-DD")
+// 回傳日期字串陣列（包含起始日）
+function computeRecurDates(startDateStr,recurType,endType,endValue){
+  const dates=[startDateStr];
+  if(recurType==="none"||!recurType)return dates;
+  const start=new Date(startDateStr+"T00:00:00");
+  const MAX=200;
+  
+  // 「每月第N個週幾」需要先算出起始日是「第幾個週幾」
+  let monthlyNth=null,monthlyDow=null;
+  if(recurType==="monthly"){
+    monthlyDow=start.getDay(); // 0=週日, 1=週一...
+    // 算出起始日是該月第幾個 dow
+    monthlyNth=Math.ceil(start.getDate()/7);
+  }
+  
+  // 取得「某年某月第N個週幾」的日期，找不到回傳 null
+  const getNthWeekday=(year,month,nth,dow)=>{
+    // month 0-indexed
+    const firstDay=new Date(year,month,1);
+    const firstDow=firstDay.getDay();
+    let offset=(dow-firstDow+7)%7; // 第一個 dow 是幾號-1
+    const day=1+offset+(nth-1)*7;
+    // 檢查是否仍在該月
+    const result=new Date(year,month,day);
+    if(result.getMonth()!==month)return null;
+    return result;
+  };
+  
+  let cur=new Date(start);
+  for(let i=0;i<MAX;i++){
+    if(recurType==="weekly"){
+      cur.setDate(cur.getDate()+7);
+    }else if(recurType==="biweekly"){
+      cur.setDate(cur.getDate()+14);
+    }else if(recurType==="monthly"){
+      // 找下個月的「第 monthlyNth 個 monthlyDow」
+      let y=cur.getFullYear(),m=cur.getMonth()+1;
+      if(m>11){m=0;y++;}
+      let attempts=0;
+      let next=null;
+      while(!next&&attempts<24){
+        next=getNthWeekday(y,m,monthlyNth,monthlyDow);
+        if(!next){
+          // 該月沒有第N個週X → 跳到下個月再找
+          m++;
+          if(m>11){m=0;y++;}
+          attempts++;
+        }
+      }
+      if(!next)break;
+      cur=next;
+    }else break;
+    
+    const ds=`${cur.getFullYear()}-${String(cur.getMonth()+1).padStart(2,"0")}-${String(cur.getDate()).padStart(2,"0")}`;
+    if(endType==="count"){
+      if(dates.length>=parseInt(endValue))break;
+      dates.push(ds);
+    }else{ // date
+      if(ds>endValue)break;
+      dates.push(ds);
+    }
+  }
+  return dates;
+}
+
+// 取得「該日是該月第幾個週幾」的描述
+function describeMonthlyNth(dateStr){
+  const d=new Date(dateStr+"T00:00:00");
+  const nth=Math.ceil(d.getDate()/7);
+  const dows=["週日","週一","週二","週三","週四","週五","週六"];
+  const nths=["第一個","第二個","第三個","第四個","第五個"];
+  return `${nths[nth-1]||`第${nth}個`}${dows[d.getDay()]}`;
+}
 const TPE_NOW=getTaipeiNow();
 const DYNAMIC_YEARS=[TPE_NOW.getFullYear()-1,TPE_NOW.getFullYear(),TPE_NOW.getFullYear()+1];
 
@@ -988,7 +1067,7 @@ function MainApp({authMaster,onLogout}){
   const[showSlots,setShowSlots]=useState(false);
   const[slotDate,setSlotDate]=useState(null);
   const[dialog,setDialog]=useState(null);
-  const[form,setForm]=useState({input:"",guests:"1",note:"",color:"none",isSplit:false,splitMasterId:""});
+  const[form,setForm]=useState({input:"",guests:"1",note:"",color:"none",isSplit:false,splitMasterId:"",recurType:"none",recurEndType:"date",recurEndDate:"",recurEndCount:12});
   const[saving,setSaving]=useState(false);
   const[cpMode,setCpMode]=useState(null);
   const[cpTarget,setCpTarget]=useState({date:"",time:""});
@@ -1135,13 +1214,86 @@ function MainApp({authMaster,onLogout}){
       if(mn>=30)tt=`${String(Math.max(8,h+1)).padStart(2,"0")}:00`;
     }
     setDialog({dateStr:fmtDate(year,month,day||today.getDate()),time:tt,masterId:master.id});
-    setForm({input:"",guests:"1",note:"",color:"none",isSplit:false,splitMasterId:""});
+    setForm({input:"",guests:"1",note:"",color:"none",isSplit:false,splitMasterId:"",recurType:"none",recurEndType:"date",recurEndDate:"",recurEndCount:12});
   };
 
   const COLOR_NO_INPUT=new Set(["reserved","custom","vacation","aftercare"]);
   const saveBk=async(isContinuous=false)=>{
     const needInput=!COLOR_NO_INPUT.has(form.color);
     if(!dialog||(needInput&&!form.input.trim())||saving)return;
+    
+    // ── 重複預約：計算所有日期 + 衝突一個個確認 ──
+    if(form.recurType&&form.recurType!=="none"){
+      let recurDates;
+      try{
+        if(form.recurEndType==="date"&&!form.recurEndDate){msg("請選擇結束日期",true);return;}
+        recurDates=computeRecurDates(dialog.dateStr,form.recurType,form.recurEndType,form.recurEndType==="date"?form.recurEndDate:form.recurEndCount);
+      }catch(e){msg("重複設定錯誤："+e.message,true);return;}
+      if(recurDates.length===0){msg("沒有產生任何日期",true);return;}
+      if(recurDates.length>100){if(!window.confirm(`即將建立 ${recurDates.length} 筆預約，數量很多，確定嗎？`))return;}
+      
+      setSaving(true);
+      const _colorLabels={reserved:"卡位",custom:"自訂",vacation:"休假",aftercare:"售後"};
+      const _rawInput=form.input.trim()||_colorLabels[form.color]||"";
+      const _parsed=parseInput(_rawInput);
+      const _name=_parsed.name,_phone=_parsed.phone;
+      
+      // 一次撈所有日期的衝突
+      const{data:_existing}=await sb.from("bookings")
+        .select("id,date,customer_name,color_tag")
+        .eq("master_id",dialog.masterId)
+        .eq("start_time",dialog.time+":00")
+        .in("date",recurDates)
+        .neq("status","cancelled");
+      const _conflictMap={};
+      (_existing||[]).forEach(c=>{_conflictMap[c.date]=c;});
+      
+      // 對每個衝突逐一詢問
+      const _skipDates=new Set();
+      const _overrideIds=[];
+      for(const _ds of recurDates){
+        const _c=_conflictMap[_ds];
+        if(!_c)continue;
+        const _choice=window.confirm(`${_ds} ${dialog.time} 已有「${_c.customer_name||_c.color_tag}」\n\n按【確定】= 覆蓋\n按【取消】= 跳過此日期`);
+        if(_choice)_overrideIds.push(_c.id);
+        else _skipDates.add(_ds);
+      }
+      
+      if(_overrideIds.length>0){
+        await sb.from("bookings").delete().in("id",_overrideIds);
+      }
+      
+      const _rowsToInsert=recurDates
+        .filter(_ds=>!_skipDates.has(_ds))
+        .map(_ds=>({master_id:dialog.masterId,raw_input:_rawInput,customer_name:_name,customer_phone:_phone||null,date:_ds,start_time:dialog.time+":00",guest_count:1,color_tag:form.color,note:form.note||null,booking_source:"internal",status:"confirmed"}));
+      
+      if(_rowsToInsert.length===0){
+        msg("所有日期都被跳過，未建立任何預約",true);
+        setSaving(false);
+        return;
+      }
+      
+      const{data:_inserted,error:_err}=await sb.from("bookings").insert(_rowsToInsert).select();
+      setSaving(false);
+      if(_err){msg("建立失敗："+_err.message,true);return;}
+      
+      const _editorName=(loginMaster||master)?.name||"系統";
+      const _nowStr=new Date().toLocaleString("zh-TW",{timeZone:"Asia/Taipei",hour:"2-digit",minute:"2-digit"});
+      if(_inserted&&_inserted.length>0){
+        pushUndo(`重複新增 ${_name} 共 ${_inserted.length} 筆`,{action:"delete_ids",ids:_inserted.map(r=>r.id)});
+        await saveEditLog(_inserted[0].id,_editorName,`【重複新增】${_name} ${dialog.time} 共 ${_inserted.length} 筆（${_nowStr}）`,{master_id:dialog.masterId,date:dialog.dateStr,start_time:dialog.time+":00"});
+      }
+      if(_phone){
+        const _todayStr=getTaipeiDateStr();
+        await sb.from("customers").upsert({phone:_phone,name:_name,first_visit_date:_todayStr,last_visit_date:_todayStr,total_visits:1},{onConflict:"phone",ignoreDuplicates:false});
+      }
+      msg(`✅ 成功建立 ${_inserted.length} 筆${_skipDates.size>0?`（跳過 ${_skipDates.size} 筆衝突）`:""}`);
+      loadBk();if(onBookingAdded)onBookingAdded();
+      if(typeof setCrmKey==="function")setCrmKey(p=>p+1);
+      setDialog(null);
+      return;
+    }
+    
     setSaving(true);
     const colorLabels={reserved:"卡位",custom:"自訂",vacation:"休假",aftercare:"售後"};
     const rawInput=form.input.trim()||colorLabels[form.color]||"";
@@ -1199,7 +1351,7 @@ function MainApp({authMaster,onLogout}){
       msg(rows.length>1?"已成功建立多筆拆單預約！":"預約成功！");
       loadBk();if(onBookingAdded)onBookingAdded();
       setCrmKey(p=>p+1);
-      if(isContinuous)setForm(f=>({...f,input:"",note:"",isSplit:false,splitMasterId:""}));
+      if(isContinuous)setForm(f=>({...f,input:"",note:"",isSplit:false,splitMasterId:"",recurType:"none"}));
       else setDialog(null);
     }else msg("儲存失敗",true);
   };
@@ -1995,6 +2147,35 @@ function MainApp({authMaster,onLogout}){
             </button>;
           })}</div>
         </div>
+        <div style={{marginBottom:10,padding:10,background:form.recurType!=="none"?"rgba(162,155,254,0.08)":"transparent",border:`1px solid ${form.recurType!=="none"?"rgba(162,155,254,0.3)":"transparent"}`,borderRadius:8}}>
+          <div style={{fontSize:11,color:form.recurType!=="none"?"#a29bfe":"var(--text-muted)",marginBottom:6,fontWeight:700}}>🔁 重複週期</div>
+          <div style={{display:"flex",gap:5,marginBottom:form.recurType!=="none"?8:0}}>
+            {[{k:"none",l:"不重複"},{k:"weekly",l:"每週"},{k:"biweekly",l:"每兩週"},{k:"monthly",l:"每月"}].map(opt=>{
+              const sel=form.recurType===opt.k;
+              return<button key={opt.k} onClick={()=>setForm(f=>({...f,recurType:opt.k,recurEndDate:f.recurEndDate||(()=>{const d=new Date(dialog.dateStr+"T00:00:00");d.setMonth(d.getMonth()+3);return d.toISOString().slice(0,10);})()}))} style={{flex:1,padding:"6px 2px",borderRadius:6,border:`1px solid ${sel?"#a29bfe":"var(--border2)"}`,background:sel?"rgba(162,155,254,0.2)":"transparent",color:sel?"#a29bfe":"var(--text-muted)",fontSize:11,fontWeight:sel?800:500,cursor:"pointer"}}>{opt.l}</button>;
+            })}
+          </div>
+          {form.recurType!=="none"&&<div>
+            <div style={{display:"flex",gap:5,marginBottom:6}}>
+              <button onClick={()=>setForm(f=>({...f,recurEndType:"date"}))} style={{flex:1,padding:"5px 2px",borderRadius:6,border:`1px solid ${form.recurEndType==="date"?"#a29bfe":"var(--border2)"}`,background:form.recurEndType==="date"?"rgba(162,155,254,0.15)":"transparent",color:form.recurEndType==="date"?"#a29bfe":"var(--text-muted)",fontSize:11,fontWeight:form.recurEndType==="date"?700:400,cursor:"pointer"}}>到指定日期</button>
+              <button onClick={()=>setForm(f=>({...f,recurEndType:"count"}))} style={{flex:1,padding:"5px 2px",borderRadius:6,border:`1px solid ${form.recurEndType==="count"?"#a29bfe":"var(--border2)"}`,background:form.recurEndType==="count"?"rgba(162,155,254,0.15)":"transparent",color:form.recurEndType==="count"?"#a29bfe":"var(--text-muted)",fontSize:11,fontWeight:form.recurEndType==="count"?700:400,cursor:"pointer"}}>重複 N 次</button>
+            </div>
+            {form.recurEndType==="date"
+              ?<input type="date" value={form.recurEndDate} min={dialog.dateStr} onChange={e=>setForm(f=>({...f,recurEndDate:e.target.value}))} style={{width:"100%",background:"var(--input-bg)",border:"1px solid var(--border2)",borderRadius:6,padding:"6px 10px",color:"var(--text-main)",fontSize:13}} />
+              :<input type="number" min={1} max={100} value={form.recurEndCount} onChange={e=>setForm(f=>({...f,recurEndCount:parseInt(e.target.value)||1}))} placeholder="次數" style={{width:"100%",background:"var(--input-bg)",border:"1px solid var(--border2)",borderRadius:6,padding:"6px 10px",color:"var(--text-main)",fontSize:13}} />
+            }
+            <div style={{fontSize:10,color:"var(--text-dim)",marginTop:4}}>
+              {(()=>{
+                try{
+                  if(form.recurEndType==="date"&&!form.recurEndDate)return "請選擇結束日期";
+                  const ds=computeRecurDates(dialog.dateStr,form.recurType,form.recurEndType,form.recurEndType==="date"?form.recurEndDate:form.recurEndCount);
+                  const monthlyHint=form.recurType==="monthly"?`（${describeMonthlyNth(dialog.dateStr)}）`:"";
+                  return `預計建立 ${ds.length} 筆預約${monthlyHint}（${ds[0]} ~ ${ds[ds.length-1]}）`;
+                }catch(e){return "請填寫結束日期/次數";}
+              })()}
+            </div>
+          </div>}
+        </div>
         <div style={{marginBottom:12}}>
           <div style={{fontSize:11,color:"var(--text-muted)",marginBottom:4}}>備註</div>
           <input value={form.note} onChange={e=>setForm(f=>({...f,note:e.target.value}))} placeholder="備註..." style={{width:"100%",background:"var(--input-bg)",border:"1px solid var(--border2)",borderRadius:8,padding:"7px 11px",color:"var(--text-main)"}} />
@@ -2344,12 +2525,85 @@ function OverviewMonth({masters,ovMasters,setOvMasters,FS,ovColW,setOvColW,ovRow
     if(!d||!m)return;
     const dateStr=fmtDate(yr,mo,d);
     setDialog({master:m,masterId:m.id,dateStr,time:t});
-    setForm({input:"",guests:"1",note:"",color:"none",isSplit:false,splitMasterId:""});
+    setForm({input:"",guests:"1",note:"",color:"none",isSplit:false,splitMasterId:"",recurType:"none",recurEndType:"date",recurEndDate:"",recurEndCount:12});
   };
   const COLOR_NO_INPUT=new Set(["reserved","custom","vacation","aftercare"]);
   const saveBk=async(isContinuous=false)=>{
     const needInput=!COLOR_NO_INPUT.has(form.color);
     if(!dialog||(needInput&&!form.input.trim())||saving)return;
+    
+    // ── 重複預約：計算所有日期 + 衝突一個個確認 ──
+    if(form.recurType&&form.recurType!=="none"){
+      let recurDates;
+      try{
+        if(form.recurEndType==="date"&&!form.recurEndDate){msg("請選擇結束日期",true);return;}
+        recurDates=computeRecurDates(dialog.dateStr,form.recurType,form.recurEndType,form.recurEndType==="date"?form.recurEndDate:form.recurEndCount);
+      }catch(e){msg("重複設定錯誤："+e.message,true);return;}
+      if(recurDates.length===0){msg("沒有產生任何日期",true);return;}
+      if(recurDates.length>100){if(!window.confirm(`即將建立 ${recurDates.length} 筆預約，數量很多，確定嗎？`))return;}
+      
+      setSaving(true);
+      const _colorLabels={reserved:"卡位",custom:"自訂",vacation:"休假",aftercare:"售後"};
+      const _rawInput=form.input.trim()||_colorLabels[form.color]||"";
+      const _parsed=parseInput(_rawInput);
+      const _name=_parsed.name,_phone=_parsed.phone;
+      
+      // 一次撈所有日期的衝突
+      const{data:_existing}=await sb.from("bookings")
+        .select("id,date,customer_name,color_tag")
+        .eq("master_id",dialog.masterId)
+        .eq("start_time",dialog.time+":00")
+        .in("date",recurDates)
+        .neq("status","cancelled");
+      const _conflictMap={};
+      (_existing||[]).forEach(c=>{_conflictMap[c.date]=c;});
+      
+      // 對每個衝突逐一詢問
+      const _skipDates=new Set();
+      const _overrideIds=[];
+      for(const _ds of recurDates){
+        const _c=_conflictMap[_ds];
+        if(!_c)continue;
+        const _choice=window.confirm(`${_ds} ${dialog.time} 已有「${_c.customer_name||_c.color_tag}」\n\n按【確定】= 覆蓋\n按【取消】= 跳過此日期`);
+        if(_choice)_overrideIds.push(_c.id);
+        else _skipDates.add(_ds);
+      }
+      
+      if(_overrideIds.length>0){
+        await sb.from("bookings").delete().in("id",_overrideIds);
+      }
+      
+      const _rowsToInsert=recurDates
+        .filter(_ds=>!_skipDates.has(_ds))
+        .map(_ds=>({master_id:dialog.masterId,raw_input:_rawInput,customer_name:_name,customer_phone:_phone||null,date:_ds,start_time:dialog.time+":00",guest_count:1,color_tag:form.color,note:form.note||null,booking_source:"internal",status:"confirmed"}));
+      
+      if(_rowsToInsert.length===0){
+        msg("所有日期都被跳過，未建立任何預約",true);
+        setSaving(false);
+        return;
+      }
+      
+      const{data:_inserted,error:_err}=await sb.from("bookings").insert(_rowsToInsert).select();
+      setSaving(false);
+      if(_err){msg("建立失敗："+_err.message,true);return;}
+      
+      const _editorName=(loginMaster||master)?.name||"系統";
+      const _nowStr=new Date().toLocaleString("zh-TW",{timeZone:"Asia/Taipei",hour:"2-digit",minute:"2-digit"});
+      if(_inserted&&_inserted.length>0){
+        pushUndo(`重複新增 ${_name} 共 ${_inserted.length} 筆`,{action:"delete_ids",ids:_inserted.map(r=>r.id)});
+        await saveEditLog(_inserted[0].id,_editorName,`【重複新增】${_name} ${dialog.time} 共 ${_inserted.length} 筆（${_nowStr}）`,{master_id:dialog.masterId,date:dialog.dateStr,start_time:dialog.time+":00"});
+      }
+      if(_phone){
+        const _todayStr=getTaipeiDateStr();
+        await sb.from("customers").upsert({phone:_phone,name:_name,first_visit_date:_todayStr,last_visit_date:_todayStr,total_visits:1},{onConflict:"phone",ignoreDuplicates:false});
+      }
+      msg(`✅ 成功建立 ${_inserted.length} 筆${_skipDates.size>0?`（跳過 ${_skipDates.size} 筆衝突）`:""}`);
+      loadBk();if(onBookingAdded)onBookingAdded();
+      if(typeof setCrmKey==="function")setCrmKey(p=>p+1);
+      setDialog(null);
+      return;
+    }
+    
     setSaving(true);
     const colorLabels={reserved:"卡位",custom:"自訂",vacation:"休假",aftercare:"售後"};
     const rawInput=form.input.trim()||colorLabels[form.color]||"";
@@ -2406,7 +2660,7 @@ function OverviewMonth({masters,ovMasters,setOvMasters,FS,ovColW,setOvColW,ovRow
       msg(rows.length>1?"已成功建立多筆拆單預約！":"預約成功！");
       loadBk();if(onBookingAdded)onBookingAdded();
       setCrmKey(p=>p+1);
-      if(isContinuous)setForm(f=>({...f,input:"",note:"",isSplit:false,splitMasterId:""}));
+      if(isContinuous)setForm(f=>({...f,input:"",note:"",isSplit:false,splitMasterId:"",recurType:"none"}));
       else setDialog(null);
     }else msg("儲存失敗",true);
   };
@@ -2680,7 +2934,7 @@ function OverviewMonth({masters,ovMasters,setOvMasters,FS,ovColW,setOvColW,ovRow
         }} className="nb" style={{color:"#00b894",borderColor:"#00b894",fontWeight:700}}>📍 當日</button>
         <button onClick={()=>{setOvDragMode(p=>!p);setOvIsDraggingVac(false);setOvDragCells(new Set());}} className="nb" style={{color:ovDragMode?"#e94560":"var(--nav-color)",borderColor:ovDragMode?"#e94560":"var(--border2)",fontWeight:ovDragMode?700:400}}>🔴 {ovDragMode?"退出":"休假"}</button>
         <button onClick={()=>{setOvMoveMode(p=>!p);setOvIsDragActive(false);}} className="nb" style={{color:ovMoveMode?"#a29bfe":"var(--nav-color)",borderColor:ovMoveMode?"#a29bfe":"var(--border2)",fontWeight:ovMoveMode?700:400}}>🔀 {ovMoveMode?"退出":"移動"}</button>
-        <button onClick={()=>{if(!sel.length)return;const m=sel[0];const d=yr===today.getFullYear()&&mo===today.getMonth()?today.getDate():1;const dateStr=fmtDate(yr,mo,d);const t=TIMES.find(x=>!REST.has(x)&&!bks[`${m.id}__${dateStr}__${x}`])||"09:00";setDialog({master:m,masterId:m.id,dateStr,time:t});setForm({input:"",guests:"1",note:"",color:"none",isSplit:false,splitMasterId:""});}} className="nb" style={{color:"#e94560",borderColor:"#e94560"}}>＋ 新增</button>
+        <button onClick={()=>{if(!sel.length)return;const m=sel[0];const d=yr===today.getFullYear()&&mo===today.getMonth()?today.getDate():1;const dateStr=fmtDate(yr,mo,d);const t=TIMES.find(x=>!REST.has(x)&&!bks[`${m.id}__${dateStr}__${x}`])||"09:00";setDialog({master:m,masterId:m.id,dateStr,time:t});setForm({input:"",guests:"1",note:"",color:"none",isSplit:false,splitMasterId:"",recurType:"none",recurEndType:"date",recurEndDate:"",recurEndCount:12});}} className="nb" style={{color:"#e94560",borderColor:"#e94560"}}>＋ 新增</button>
         <span style={{fontSize:10,color:"var(--text-dim)"}}>欄</span>
         <input type="range" min="45" max="140" value={ocw} onChange={e=>setOvColW(e.target.value)} style={{width:50,cursor:"pointer",accentColor:"#74b9ff"}} />
         <span style={{fontSize:10,color:"#74b9ff",minWidth:22,fontWeight:700}}>{ocw}</span>
@@ -2728,7 +2982,7 @@ function OverviewMonth({masters,ovMasters,setOvMasters,FS,ovColW,setOvColW,ovRow
         return<div key={m.id} style={{marginBottom:4}}>
           <span style={{fontSize:11,color:"#00b894",marginRight:6,fontWeight:700}}>{m.name} 空檔 {slots.length} 格</span>
           <span style={{display:"inline-flex",flexWrap:"wrap",gap:3}}>
-            {slots.map(t=><button key={t} onClick={()=>{setDialog({master:m,masterId:m.id,dateStr,time:t});setForm({input:"",guests:"1",note:"",color:"none",isSplit:false,splitMasterId:""});setOvShowSlots(false);setOvSlotDate(null);}} style={{padding:"2px 7px",background:"#00b89415",border:"1px solid #00b89440",color:"#00b894",borderRadius:4,fontSize:10,cursor:"pointer"}}>{t}</button>)}
+            {slots.map(t=><button key={t} onClick={()=>{setDialog({master:m,masterId:m.id,dateStr,time:t});setForm({input:"",guests:"1",note:"",color:"none",isSplit:false,splitMasterId:"",recurType:"none",recurEndType:"date",recurEndDate:"",recurEndCount:12});setOvShowSlots(false);setOvSlotDate(null);}} style={{padding:"2px 7px",background:"#00b89415",border:"1px solid #00b89440",color:"#00b894",borderRadius:4,fontSize:10,cursor:"pointer"}}>{t}</button>)}
           </span>
         </div>;
       })}
@@ -3026,6 +3280,35 @@ function OverviewMonth({masters,ovMasters,setOvMasters,FS,ovColW,setOvColW,ovRow
               {cc.label}
             </button>;
           })}</div>
+        </div>
+        <div style={{marginBottom:10,padding:10,background:form.recurType!=="none"?"rgba(162,155,254,0.08)":"transparent",border:`1px solid ${form.recurType!=="none"?"rgba(162,155,254,0.3)":"transparent"}`,borderRadius:8}}>
+          <div style={{fontSize:11,color:form.recurType!=="none"?"#a29bfe":"var(--text-muted)",marginBottom:6,fontWeight:700}}>🔁 重複週期</div>
+          <div style={{display:"flex",gap:5,marginBottom:form.recurType!=="none"?8:0}}>
+            {[{k:"none",l:"不重複"},{k:"weekly",l:"每週"},{k:"biweekly",l:"每兩週"},{k:"monthly",l:"每月"}].map(opt=>{
+              const sel=form.recurType===opt.k;
+              return<button key={opt.k} onClick={()=>setForm(f=>({...f,recurType:opt.k,recurEndDate:f.recurEndDate||(()=>{const d=new Date(dialog.dateStr+"T00:00:00");d.setMonth(d.getMonth()+3);return d.toISOString().slice(0,10);})()}))} style={{flex:1,padding:"6px 2px",borderRadius:6,border:`1px solid ${sel?"#a29bfe":"var(--border2)"}`,background:sel?"rgba(162,155,254,0.2)":"transparent",color:sel?"#a29bfe":"var(--text-muted)",fontSize:11,fontWeight:sel?800:500,cursor:"pointer"}}>{opt.l}</button>;
+            })}
+          </div>
+          {form.recurType!=="none"&&<div>
+            <div style={{display:"flex",gap:5,marginBottom:6}}>
+              <button onClick={()=>setForm(f=>({...f,recurEndType:"date"}))} style={{flex:1,padding:"5px 2px",borderRadius:6,border:`1px solid ${form.recurEndType==="date"?"#a29bfe":"var(--border2)"}`,background:form.recurEndType==="date"?"rgba(162,155,254,0.15)":"transparent",color:form.recurEndType==="date"?"#a29bfe":"var(--text-muted)",fontSize:11,fontWeight:form.recurEndType==="date"?700:400,cursor:"pointer"}}>到指定日期</button>
+              <button onClick={()=>setForm(f=>({...f,recurEndType:"count"}))} style={{flex:1,padding:"5px 2px",borderRadius:6,border:`1px solid ${form.recurEndType==="count"?"#a29bfe":"var(--border2)"}`,background:form.recurEndType==="count"?"rgba(162,155,254,0.15)":"transparent",color:form.recurEndType==="count"?"#a29bfe":"var(--text-muted)",fontSize:11,fontWeight:form.recurEndType==="count"?700:400,cursor:"pointer"}}>重複 N 次</button>
+            </div>
+            {form.recurEndType==="date"
+              ?<input type="date" value={form.recurEndDate} min={dialog.dateStr} onChange={e=>setForm(f=>({...f,recurEndDate:e.target.value}))} style={{width:"100%",background:"var(--input-bg)",border:"1px solid var(--border2)",borderRadius:6,padding:"6px 10px",color:"var(--text-main)",fontSize:13}} />
+              :<input type="number" min={1} max={100} value={form.recurEndCount} onChange={e=>setForm(f=>({...f,recurEndCount:parseInt(e.target.value)||1}))} placeholder="次數" style={{width:"100%",background:"var(--input-bg)",border:"1px solid var(--border2)",borderRadius:6,padding:"6px 10px",color:"var(--text-main)",fontSize:13}} />
+            }
+            <div style={{fontSize:10,color:"var(--text-dim)",marginTop:4}}>
+              {(()=>{
+                try{
+                  if(form.recurEndType==="date"&&!form.recurEndDate)return "請選擇結束日期";
+                  const ds=computeRecurDates(dialog.dateStr,form.recurType,form.recurEndType,form.recurEndType==="date"?form.recurEndDate:form.recurEndCount);
+                  const monthlyHint=form.recurType==="monthly"?`（${describeMonthlyNth(dialog.dateStr)}）`:"";
+                  return `預計建立 ${ds.length} 筆預約${monthlyHint}（${ds[0]} ~ ${ds[ds.length-1]}）`;
+                }catch(e){return "請填寫結束日期/次數";}
+              })()}
+            </div>
+          </div>}
         </div>
         <div style={{marginBottom:12}}>
           <div style={{fontSize:11,color:"var(--text-muted)",marginBottom:4}}>備註</div>
