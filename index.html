@@ -116,19 +116,21 @@ const COLORS=[
 
 // 系統預設名字 — 當使用者選色標但沒輸入名字時，系統會自動填這些字
 const COLOR_DEFAULT_NAMES={vacation:"休假",reserved:"卡位",custom:"自訂",aftercare:"售後"};
+// 所有可能的「系統預設名字」（也包含跨色標的舊資料容錯）
+const ALL_DEFAULT_NAMES=new Set(["休假","卡位","自訂","售後"]);
 
 // 計入人數規則：只有「使用者真的有寫名字」才算
 //   - 售後 (aftercare)：永不計入（不管有沒有名字）
 //   - 休假 (vacation)：永不計入（guest_count=0 也會擋掉）
-//   - 卡位/自訂：若名字還是系統預設「卡位」「自訂」→ 沒寫真名 → 不算
+//   - 卡位/自訂：若名字仍是任何系統預設值（卡位/自訂/休假/售後）→ 沒寫真名 → 不算
 //   - 舊客/新客：必填名字，必算
 const isCountable=(b)=>{
   if(!b||(b.guest_count||0)<=0)return false;
   if(b.color_tag==="aftercare"||b.color_tag==="vacation")return false;
-  const def=COLOR_DEFAULT_NAMES[b.color_tag];
-  if(def){
-    const nm=(b.customer_name||"").trim();
-    if(nm===""||nm===def)return false;
+  // 卡位/自訂：嚴格檢查名字是不是系統預設（含舊資料：可能存「卡位 」帶空白、或顏色與名字錯位）
+  if(b.color_tag==="reserved"||b.color_tag==="custom"){
+    const nm=(b.customer_name||"").replace(/\s+/g,"").trim();
+    if(nm===""||ALL_DEFAULT_NAMES.has(nm))return false;
   }
   return true;
 };
@@ -3581,6 +3583,15 @@ function AnalyticsModule({masters,FS,currentMaster}){
   };
 
 
+  const[debugInfo,setDebugInfo]=useState(null);
+  const showDebug=(masterId,y,m)=>{
+    const prefix=`${y}-${String(m+1).padStart(2,"0")}`;
+    const all=allData.filter(b=>b.master_id===masterId&&b.date.startsWith(prefix));
+    const counted=all.filter(b=>isCountable(b));
+    const excluded=all.filter(b=>!isCountable(b));
+    setDebugInfo({y,m,all:all.length,counted:counted.length,excluded});
+  };
+
   const selMaster=activeMasters.find(m=>m.id===selMasterId)||activeMasters[0];
   const TC={fontSize:11,padding:"5px 6px",textAlign:"center",border:"1px solid var(--border)",color:"var(--text-main)"};
   const TH={...TC,background:"var(--bg-sub)",fontWeight:700,color:"var(--text-muted)",fontSize:10};
@@ -3631,6 +3642,7 @@ function AnalyticsModule({masters,FS,currentMaster}){
         <div style={{padding:"8px 12px"}}>
           <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,flexWrap:"wrap"}}>
             <span style={{fontSize:12,fontWeight:700,color:"var(--text-muted)"}}>{selMaster.name} — 每日明細</span>
+            <button onClick={()=>showDebug(selMasterId,year,detailMonth)} style={{padding:"2px 8px",borderRadius:12,border:"1px solid #f5a62360",background:"transparent",color:"#f5a623",fontSize:10,cursor:"pointer",fontFamily:"inherit"}}>🔍 檢查未計入紀錄</button>
             <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
               {MONTHS.map((_,mi)=>(
                 <button key={mi} onClick={()=>setDetailMonth(mi)} style={{padding:"2px 8px",borderRadius:12,border:`1px solid ${detailMonth===mi?"#74b9ff":"var(--border2)"}`,background:detailMonth===mi?"#74b9ff22":"transparent",color:detailMonth===mi?"#74b9ff":"var(--text-dim)",fontSize:10,cursor:"pointer"}}>{mi+1}月</button>
@@ -3647,6 +3659,60 @@ function AnalyticsModule({masters,FS,currentMaster}){
             ))}
           </div>
         </div>
+
+        {/* 🔍 診斷視窗 */}
+        {debugInfo&&<div onClick={()=>setDebugInfo(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.7)",zIndex:999,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:"var(--bg-sub)",borderRadius:"16px 16px 0 0",padding:"20px 16px 30px",width:"100%",maxWidth:560,maxHeight:"75vh",display:"flex",flexDirection:"column"}}>
+            <div style={{width:36,height:4,background:"var(--border)",borderRadius:2,margin:"0 auto 14px"}}></div>
+            <div style={{fontSize:15,fontWeight:900,marginBottom:6}}>🔍 {debugInfo.y}年{debugInfo.m+1}月 — 計入規則檢查</div>
+            <div style={{fontSize:12,color:"var(--text-muted)",marginBottom:14,lineHeight:1.7}}>
+              <div>📊 該月所有預約紀錄：<b style={{color:"var(--text-main)"}}>{debugInfo.all}</b> 筆</div>
+              <div>✓ 計入人數：<b style={{color:"#74b9ff"}}>{debugInfo.counted}</b> 筆</div>
+              <div>✗ 未計入：<b style={{color:"#e94560"}}>{debugInfo.excluded.length}</b> 筆（明細如下）</div>
+            </div>
+            <div style={{flex:1,overflowY:"auto",border:"1px solid var(--border)",borderRadius:8}}>
+              {debugInfo.excluded.length===0?(
+                <div style={{padding:20,textAlign:"center",color:"var(--text-dim)",fontSize:13}}>✅ 所有紀錄都已計入</div>
+              ):(
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+                  <thead>
+                    <tr style={{background:"var(--bg-header)",position:"sticky",top:0}}>
+                      <th style={{padding:"6px 4px",textAlign:"left",borderBottom:"1px solid var(--border)"}}>日期</th>
+                      <th style={{padding:"6px 4px",textAlign:"left",borderBottom:"1px solid var(--border)"}}>名字</th>
+                      <th style={{padding:"6px 4px",textAlign:"center",borderBottom:"1px solid var(--border)"}}>色標</th>
+                      <th style={{padding:"6px 4px",textAlign:"center",borderBottom:"1px solid var(--border)"}}>人數</th>
+                      <th style={{padding:"6px 4px",textAlign:"left",borderBottom:"1px solid var(--border)"}}>未計入原因</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {debugInfo.excluded.map((b,i)=>{
+                      const colorLabel={none:"舊客",new_customer:"新客",vacation:"休假",reserved:"卡位",custom:"自訂",aftercare:"售後"}[b.color_tag||"none"]||b.color_tag;
+                      let reason="";
+                      if(!b.guest_count||b.guest_count<=0)reason="人數=0";
+                      else if(b.color_tag==="vacation")reason="休假不計";
+                      else if(b.color_tag==="aftercare")reason="售後不計";
+                      else if(b.color_tag==="reserved"||b.color_tag==="custom"){
+                        const nm=(b.customer_name||"").replace(/\s+/g,"").trim();
+                        if(nm==="")reason="名字空白";
+                        else if(ALL_DEFAULT_NAMES.has(nm))reason=`名字="${nm}"（預設值）`;
+                      }
+                      return(
+                        <tr key={i} style={{borderBottom:"1px solid var(--border)"}}>
+                          <td style={{padding:"6px 4px",color:"var(--text-dim)",whiteSpace:"nowrap"}}>{b.date.slice(5)}</td>
+                          <td style={{padding:"6px 4px",color:"var(--text-main)"}}>{b.customer_name||"(空)"}</td>
+                          <td style={{padding:"6px 4px",textAlign:"center",color:"var(--text-muted)"}}>{colorLabel}</td>
+                          <td style={{padding:"6px 4px",textAlign:"center"}}>{b.guest_count}</td>
+                          <td style={{padding:"6px 4px",color:"#f5a623",fontSize:10}}>{reason}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+            <button onClick={()=>setDebugInfo(null)} style={{marginTop:12,padding:10,borderRadius:8,background:"var(--bg-header)",border:"1px solid var(--border)",color:"var(--text-main)",fontSize:13,fontWeight:700,cursor:"pointer"}}>關閉</button>
+          </div>
+        </div>}
       </>}
     </div>}
 
