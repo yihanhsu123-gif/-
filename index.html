@@ -2804,6 +2804,32 @@ function OverviewMonth({masters,ovMasters,setOvMasters,FS,ovColW,setOvColW,ovRow
 
 // ═══════════════════════════════════════════
 // CRM MODULE
+// ─── 客戶備註/症狀欄位（內部子元件） ───
+function CustNoteField({label,placeholder,initValue,onSave,disabled,accent}){
+  const[val,setVal]=useState(initValue||"");
+  const[editing,setEditing]=useState(false);
+  useEffect(()=>{setVal(initValue||"");},[initValue]);
+  const dirty=val!==(initValue||"");
+  return(
+    <div style={{background:"var(--bg-header)",border:`1px solid ${editing?accent+"66":"var(--border2)"}`,borderRadius:10,padding:"10px 12px",transition:"border 0.15s"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+        <span style={{fontSize:12,fontWeight:700,color:accent}}>{label}</span>
+        {dirty&&editing&&<div style={{display:"flex",gap:6}}>
+          <button disabled={disabled} onClick={()=>{setVal(initValue||"");setEditing(false);}} style={{padding:"3px 10px",borderRadius:6,border:"1px solid var(--border2)",background:"transparent",color:"var(--text-dim)",fontSize:11,cursor:"pointer"}}>取消</button>
+          <button disabled={disabled} onClick={()=>{onSave(val.trim());setEditing(false);}} style={{padding:"3px 10px",borderRadius:6,border:"none",background:accent,color:"#000",fontSize:11,fontWeight:700,cursor:"pointer"}}>{disabled?"儲存中…":"儲存"}</button>
+        </div>}
+      </div>
+      <textarea value={val} placeholder={placeholder}
+        onChange={e=>setVal(e.target.value)}
+        onFocus={()=>setEditing(true)}
+        onBlur={()=>{if(!dirty)setEditing(false);}}
+        rows={val.split("\n").length>2?Math.min(val.split("\n").length,6):2}
+        style={{width:"100%",background:"var(--bg-sub)",border:"1px solid var(--border)",borderRadius:6,padding:"7px 9px",color:"var(--text-main)",fontSize:13,outline:"none",resize:"vertical",fontFamily:"inherit",minHeight:38}}/>
+    </div>
+  );
+}
+
+// CRM MODULE
 // ═══════════════════════════════════════════
 
 function LineNameSearch({selName, lineBindings, onMatch, existingMatch, onRename, onUpdateBookings}){
@@ -2904,6 +2930,19 @@ function CRMModule({masters,FS}){
   };
 
   const[lineBindings,setLineBindings]=useState({});
+  // 客戶備註/症狀資料（key=phone or 'name:'+name）
+  const[customerInfo,setCustomerInfo]=useState({});
+  const[savingInfo,setSavingInfo]=useState(false);
+
+  // 取得客戶 key（優先用 phone；無 phone 則用 name 當 key）
+  const getCustKey=(c)=>{
+    if(!c)return null;
+    const phone=c.phone||(c.bks||[]).map(b=>b.customer_phone).find(Boolean);
+    if(phone)return{type:"phone",val:phone};
+    if(c.name)return{type:"name",val:c.name};
+    return null;
+  };
+  const getInfoKey=(k)=>k?`${k.type}:${k.val}`:null;
 
   useEffect(()=>{
     setLoading(true);
@@ -2923,6 +2962,18 @@ function CRMModule({masters,FS}){
       const lmap={};
       (lb||[]).forEach(b=>{if(b.phone)lmap[b.phone]={displayName:b.display_name,lineUserId:b.line_user_id};});
       setLineBindings(lmap);
+      // Load customer notes/symptoms
+      try{
+        const{data:custs}=await sb.from("customers").select("phone,name,note,symptoms");
+        const cmap={};
+        (custs||[]).forEach(c=>{
+          if(c.note||c.symptoms){
+            if(c.phone)cmap[`phone:${c.phone}`]={note:c.note||"",symptoms:c.symptoms||""};
+            else if(c.name)cmap[`name:${c.name}`]={note:c.note||"",symptoms:c.symptoms||""};
+          }
+        });
+        setCustomerInfo(cmap);
+      }catch(e){console.warn("customer note/symptoms 欄位可能尚未建立",e);}
       setLoading(false);
     };
     fetchAll();
@@ -3320,6 +3371,42 @@ function CRMModule({masters,FS}){
               {sel.daysSince>90&&<span style={{padding:"2px 10px",background:"rgba(245,166,35,0.15)",borderRadius:10,fontSize:11,color:"#f5a623"}}>⚠ 超過3個月</span>}
             </div>
           </div>
+          {/* ─── 備註 & 症狀 編輯區塊 ─── */}
+          {(()=>{
+            const ck=getCustKey(sel);
+            const ikey=getInfoKey(ck);
+            if(!ikey)return null;
+            const cur=customerInfo[ikey]||{note:"",symptoms:""};
+            const saveField=async(field,val)=>{
+              setSavingInfo(true);
+              try{
+                if(ck.type==="phone"){
+                  // 用 phone upsert
+                  await sb.from("customers").upsert({phone:ck.val,name:sel.name,[field]:val},{onConflict:"phone",ignoreDuplicates:false});
+                }else{
+                  // 無 phone：用 name 作為 key（先查再寫）
+                  const{data:exist}=await sb.from("customers").select("phone").eq("name",ck.val).limit(1);
+                  if(exist&&exist.length>0&&exist[0].phone){
+                    await sb.from("customers").update({[field]:val}).eq("phone",exist[0].phone);
+                  }else{
+                    await sb.from("customers").upsert({name:ck.val,[field]:val},{onConflict:"name",ignoreDuplicates:false}).then(r=>r,e=>console.warn(e));
+                  }
+                }
+                setCustomerInfo(prev=>({...prev,[ikey]:{...cur,[field]:val}}));
+                msgCrm(`✅ ${field==="note"?"備註":"症狀"}已儲存`);
+              }catch(e){
+                console.error(e);
+                msgCrm("儲存失敗：請確認 customers 表已加 note/symptoms 欄位",true);
+              }finally{setSavingInfo(false);}
+            };
+            return(
+              <div style={{marginBottom:14,display:"flex",flexDirection:"column",gap:10}}>
+                <CustNoteField label="📝 備註" placeholder="例如：客人偏好、習慣、聯絡注意事項…" initValue={cur.note} onSave={(v)=>saveField("note",v)} disabled={savingInfo} accent="#74b9ff"/>
+                <CustNoteField label="💊 症狀" placeholder="例如：肩頸僵硬、腰痠、舊傷部位…" initValue={cur.symptoms} onSave={(v)=>saveField("symptoms",v)} disabled={savingInfo} accent="#f5a623"/>
+              </div>
+            );
+          })()}
+
           <div style={{fontSize:13,fontWeight:700,marginBottom:10,color:"var(--text-muted)"}}>消費歷程（{sortedBks.length}筆）</div>
           {sortedBks.map(b=>(
             <div key={b.id} style={{display:"flex",gap:10,marginBottom:8,paddingBottom:8,borderBottom:"1px solid var(--border)",alignItems:"flex-start"}}>
