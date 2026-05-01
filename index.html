@@ -2803,28 +2803,28 @@ function OverviewMonth({masters,ovMasters,setOvMasters,FS,ovColW,setOvColW,ovRow
 }
 
 // ═══════════════════════════════════════════
-// CRM MODULE
-// ─── 客戶備註/症狀欄位（內部子元件） ───
-function CustNoteField({label,placeholder,initValue,onSave,disabled,accent}){
-  const[val,setVal]=useState(initValue||"");
-  const[editing,setEditing]=useState(false);
-  useEffect(()=>{setVal(initValue||"");},[initValue]);
-  const dirty=val!==(initValue||"");
+// ─── 客戶備註/症狀 編輯彈窗 ───
+function NoteEditModal({editor,onSave,onClose,saving}){
+  const[val,setVal]=useState(editor.initValue||"");
+  useEffect(()=>{setVal(editor.initValue||"");},[editor]);
+  const dirty=val!==(editor.initValue||"");
   return(
-    <div style={{background:"var(--bg-header)",border:`1px solid ${editing?accent+"66":"var(--border2)"}`,borderRadius:10,padding:"10px 12px",transition:"border 0.15s"}}>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
-        <span style={{fontSize:12,fontWeight:700,color:accent}}>{label}</span>
-        {dirty&&editing&&<div style={{display:"flex",gap:6}}>
-          <button disabled={disabled} onClick={()=>{setVal(initValue||"");setEditing(false);}} style={{padding:"3px 10px",borderRadius:6,border:"1px solid var(--border2)",background:"transparent",color:"var(--text-dim)",fontSize:11,cursor:"pointer"}}>取消</button>
-          <button disabled={disabled} onClick={()=>{onSave(val.trim());setEditing(false);}} style={{padding:"3px 10px",borderRadius:6,border:"none",background:accent,color:"#000",fontSize:11,fontWeight:700,cursor:"pointer"}}>{disabled?"儲存中…":"儲存"}</button>
-        </div>}
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",zIndex:1000,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"var(--bg-header)",borderRadius:"16px 16px 0 0",padding:"18px 16px 30px",width:"100%",maxWidth:480,borderTop:`3px solid ${editor.accent}`}}>
+        <div style={{width:36,height:4,background:"var(--border)",borderRadius:2,margin:"0 auto 14px"}}></div>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+          <div style={{fontSize:15,fontWeight:900,color:editor.accent}}>{editor.icon} {editor.customer.name} — {editor.label}</div>
+        </div>
+        <div style={{fontSize:11,color:"var(--text-dim)",marginBottom:10}}>{editor.customer.phone||"無電話"} · 共{editor.customer.totalVisits}次</div>
+        <textarea value={val} placeholder={editor.placeholder} autoFocus
+          onChange={e=>setVal(e.target.value)}
+          rows={5}
+          style={{width:"100%",background:"var(--bg-sub)",border:"1px solid var(--border)",borderRadius:8,padding:"10px 12px",color:"var(--text-main)",fontSize:14,outline:"none",resize:"vertical",fontFamily:"inherit",minHeight:90,marginBottom:14}}/>
+        <div style={{display:"flex",gap:8}}>
+          <button onClick={onClose} disabled={saving} style={{flex:1,padding:12,borderRadius:10,border:"1px solid var(--border2)",background:"transparent",color:"var(--text-main)",fontSize:14,fontWeight:700,cursor:"pointer"}}>取消</button>
+          <button onClick={()=>onSave(val)} disabled={saving||!dirty} style={{flex:2,padding:12,borderRadius:10,border:"none",background:dirty?editor.accent:"var(--border)",color:dirty?"#000":"var(--text-dim)",fontSize:14,fontWeight:900,cursor:dirty?"pointer":"not-allowed"}}>{saving?"儲存中…":"💾 儲存"}</button>
+        </div>
       </div>
-      <textarea value={val} placeholder={placeholder}
-        onChange={e=>setVal(e.target.value)}
-        onFocus={()=>setEditing(true)}
-        onBlur={()=>{if(!dirty)setEditing(false);}}
-        rows={val.split("\n").length>2?Math.min(val.split("\n").length,6):2}
-        style={{width:"100%",background:"var(--bg-sub)",border:"1px solid var(--border)",borderRadius:6,padding:"7px 9px",color:"var(--text-main)",fontSize:13,outline:"none",resize:"vertical",fontFamily:"inherit",minHeight:38}}/>
     </div>
   );
 }
@@ -2933,6 +2933,8 @@ function CRMModule({masters,FS}){
   // 客戶備註/症狀資料（key=phone or 'name:'+name）
   const[customerInfo,setCustomerInfo]=useState({});
   const[savingInfo,setSavingInfo]=useState(false);
+  // 備註/症狀編輯彈窗
+  const[noteEditor,setNoteEditor]=useState(null);
 
   // 取得客戶 key（優先用 phone；無 phone 則用 name 當 key）
   const getCustKey=(c)=>{
@@ -3371,42 +3373,6 @@ function CRMModule({masters,FS}){
               {sel.daysSince>90&&<span style={{padding:"2px 10px",background:"rgba(245,166,35,0.15)",borderRadius:10,fontSize:11,color:"#f5a623"}}>⚠ 超過3個月</span>}
             </div>
           </div>
-          {/* ─── 備註 & 症狀 編輯區塊 ─── */}
-          {(()=>{
-            const ck=getCustKey(sel);
-            const ikey=getInfoKey(ck);
-            if(!ikey)return null;
-            const cur=customerInfo[ikey]||{note:"",symptoms:""};
-            const saveField=async(field,val)=>{
-              setSavingInfo(true);
-              try{
-                if(ck.type==="phone"){
-                  // 用 phone upsert
-                  await sb.from("customers").upsert({phone:ck.val,name:sel.name,[field]:val},{onConflict:"phone",ignoreDuplicates:false});
-                }else{
-                  // 無 phone：用 name 作為 key（先查再寫）
-                  const{data:exist}=await sb.from("customers").select("phone").eq("name",ck.val).limit(1);
-                  if(exist&&exist.length>0&&exist[0].phone){
-                    await sb.from("customers").update({[field]:val}).eq("phone",exist[0].phone);
-                  }else{
-                    await sb.from("customers").upsert({name:ck.val,[field]:val},{onConflict:"name",ignoreDuplicates:false}).then(r=>r,e=>console.warn(e));
-                  }
-                }
-                setCustomerInfo(prev=>({...prev,[ikey]:{...cur,[field]:val}}));
-                msgCrm(`✅ ${field==="note"?"備註":"症狀"}已儲存`);
-              }catch(e){
-                console.error(e);
-                msgCrm("儲存失敗：請確認 customers 表已加 note/symptoms 欄位",true);
-              }finally{setSavingInfo(false);}
-            };
-            return(
-              <div style={{marginBottom:14,display:"flex",flexDirection:"column",gap:10}}>
-                <CustNoteField label="📝 備註" placeholder="例如：客人偏好、習慣、聯絡注意事項…" initValue={cur.note} onSave={(v)=>saveField("note",v)} disabled={savingInfo} accent="#74b9ff"/>
-                <CustNoteField label="💊 症狀" placeholder="例如：肩頸僵硬、腰痠、舊傷部位…" initValue={cur.symptoms} onSave={(v)=>saveField("symptoms",v)} disabled={savingInfo} accent="#f5a623"/>
-              </div>
-            );
-          })()}
-
           <div style={{fontSize:13,fontWeight:700,marginBottom:10,color:"var(--text-muted)"}}>消費歷程（{sortedBks.length}筆）</div>
           {sortedBks.map(b=>(
             <div key={b.id} style={{display:"flex",gap:10,marginBottom:8,paddingBottom:8,borderBottom:"1px solid var(--border)",alignItems:"flex-start"}}>
@@ -3472,6 +3438,37 @@ function CRMModule({masters,FS}){
 
   return(
     <div style={{flex:1,overflow:"auto",background:"var(--bg-main)",paddingBottom:60}}>
+      {crmToast&&<div style={{position:"fixed",top:12,left:"50%",transform:"translateX(-50%)",background:crmToast.err?"#e94560":"#00b894",color:"#fff",padding:"8px 20px",borderRadius:20,fontSize:13,fontWeight:700,zIndex:9999,whiteSpace:"nowrap"}}>{crmToast.m}</div>}
+      {/* 備註/症狀 編輯彈窗 */}
+      {noteEditor&&(()=>{
+        const ne=noteEditor;
+        const ck=getCustKey(ne.customer);
+        const ikey=getInfoKey(ck);
+        const handleSave=async(val)=>{
+          if(!ck||!ikey)return;
+          setSavingInfo(true);
+          try{
+            const cur=customerInfo[ikey]||{note:"",symptoms:""};
+            if(ck.type==="phone"){
+              await sb.from("customers").upsert({phone:ck.val,name:ne.customer.name,[ne.field]:val.trim()},{onConflict:"phone",ignoreDuplicates:false});
+            }else{
+              const{data:exist}=await sb.from("customers").select("phone").eq("name",ck.val).limit(1);
+              if(exist&&exist.length>0&&exist[0].phone){
+                await sb.from("customers").update({[ne.field]:val.trim()}).eq("phone",exist[0].phone);
+              }else{
+                await sb.from("customers").upsert({name:ck.val,[ne.field]:val.trim()},{onConflict:"name",ignoreDuplicates:false});
+              }
+            }
+            setCustomerInfo(prev=>({...prev,[ikey]:{...cur,[ne.field]:val.trim()}}));
+            msgCrm(`✅ ${ne.label}已儲存`);
+            setNoteEditor(null);
+          }catch(e){
+            console.error(e);
+            msgCrm("儲存失敗：請確認 customers 表已加 note/symptoms 欄位",true);
+          }finally{setSavingInfo(false);}
+        };
+        return<NoteEditModal editor={ne} onSave={handleSave} onClose={()=>setNoteEditor(null)} saving={savingInfo}/>;
+      })()}
       <div style={{padding:10,background:"var(--bg-header)",display:"flex",gap:8}}>
         <input placeholder="🔍 搜尋姓名/電話..." onChange={e=>setSearch(e.target.value)} style={{flex:1,padding:"6px 10px",borderRadius:6,background:"var(--input-bg)",border:"1px solid var(--border2)",color:"var(--text-main)"}} />
         <select value={selMaster} onChange={e=>setSelMaster(e.target.value)} style={{background:"var(--nav-bg)",border:"1px solid var(--border2)",borderRadius:6,padding:"5px 8px",fontSize:12,color:"var(--text-main)"}}>
@@ -3569,18 +3566,50 @@ function CRMModule({masters,FS}){
       </>}
       <div style={{display:crmTab==="noshow"||crmTab==="merge"?"none":"block"}}>
         {filtered.length===0&&crmTab!=="noshow"&&<div style={{padding:20,textAlign:"center",color:"var(--text-dim)"}}>無資料</div>}
-        {filtered.map(c=>(
-          <div key={c.key} onClick={()=>setSel(c)} style={{padding:"12px 14px",borderBottom:"1px solid var(--border)",display:"flex",justifyContent:"space-between",cursor:"pointer"}}>
-            <div style={{flex:1}}>
-              <div style={{fontWeight:700,fontSize:14,marginBottom:4,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
-                {c.name} <span style={{fontSize:10,background:"var(--bg-sub)",padding:"2px 6px",borderRadius:6,color:"var(--text-dim)"}}>{c.masterName}</span>
-                {c.isCrispy&&<span style={{fontSize:10,background:"rgba(245,166,35,0.2)",padding:"2px 6px",borderRadius:6,color:"#f5a623",border:"1px solid rgba(245,166,35,0.4)"}}>🫧 脆脆獨立</span>}
+        {filtered.map(c=>{
+          const ck=getCustKey(c);
+          const ikey=getInfoKey(ck);
+          const info=ikey?(customerInfo[ikey]||{note:"",symptoms:""}):{note:"",symptoms:""};
+          const hasNote=!!info.note?.trim();
+          const hasSymp=!!info.symptoms?.trim();
+          return(
+            <div key={c.key} style={{padding:"12px 14px",borderBottom:"1px solid var(--border)",display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+              <div onClick={()=>setSel(c)} style={{flex:1,cursor:"pointer",minWidth:0}}>
+                <div style={{fontWeight:700,fontSize:14,marginBottom:4,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                  {c.name} <span style={{fontSize:10,background:"var(--bg-sub)",padding:"2px 6px",borderRadius:6,color:"var(--text-dim)"}}>{c.masterName}</span>
+                  {c.isCrispy&&<span style={{fontSize:10,background:"rgba(245,166,35,0.2)",padding:"2px 6px",borderRadius:6,color:"#f5a623",border:"1px solid rgba(245,166,35,0.4)"}}>🫧 脆脆獨立</span>}
+                </div>
+                <div style={{fontSize:12,color:"var(--text-muted)"}}>{c.phone||"無電話"} · 共{c.totalVisits}次</div>
               </div>
-              <div style={{fontSize:12,color:"var(--text-muted)"}}>{c.phone||"無電話"} · 共{c.totalVisits}次</div>
+              <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+                {/* 備註 / 症狀 圖示 — 永遠顯示，有內容時亮起 */}
+                {ikey&&<div style={{display:"flex",gap:4}}>
+                  <button
+                    onClick={(e)=>{e.stopPropagation();setNoteEditor({customer:c,field:"note",label:"備註",placeholder:"例如：客人偏好、習慣、聯絡注意事項…",accent:"#74b9ff",icon:"📝",initValue:info.note||""});}}
+                    title={hasNote?`備註：${info.note}`:"新增備註"}
+                    style={{
+                      width:30,height:30,borderRadius:8,border:`1px solid ${hasNote?"#74b9ff":"var(--border2)"}`,
+                      background:hasNote?"rgba(116,185,255,0.15)":"transparent",
+                      color:hasNote?"#74b9ff":"var(--text-dim)",
+                      fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",
+                      position:"relative",fontFamily:"inherit"
+                    }}>📝{hasNote&&<span style={{position:"absolute",top:-2,right:-2,width:7,height:7,background:"#74b9ff",borderRadius:"50%"}}></span>}</button>
+                  <button
+                    onClick={(e)=>{e.stopPropagation();setNoteEditor({customer:c,field:"symptoms",label:"症狀",placeholder:"例如：肩頸僵硬、腰痠、舊傷部位…",accent:"#f5a623",icon:"💊",initValue:info.symptoms||""});}}
+                    title={hasSymp?`症狀：${info.symptoms}`:"新增症狀"}
+                    style={{
+                      width:30,height:30,borderRadius:8,border:`1px solid ${hasSymp?"#f5a623":"var(--border2)"}`,
+                      background:hasSymp?"rgba(245,166,35,0.15)":"transparent",
+                      color:hasSymp?"#f5a623":"var(--text-dim)",
+                      fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",
+                      position:"relative",fontFamily:"inherit"
+                    }}>💊{hasSymp&&<span style={{position:"absolute",top:-2,right:-2,width:7,height:7,background:"#f5a623",borderRadius:"50%"}}></span>}</button>
+                </div>}
+                <div onClick={()=>setSel(c)} style={{textAlign:"right",fontWeight:700,color:c.daysSince>90?"#e94560":c.daysSince>30?"#f5a623":"#00b894",cursor:"pointer",whiteSpace:"nowrap",fontSize:13}}>{c.daysSince}天前</div>
+              </div>
             </div>
-            <div style={{textAlign:"right",fontWeight:700,color:c.daysSince>90?"#e94560":c.daysSince>30?"#f5a623":"#00b894"}}>{c.daysSince}天前</div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
