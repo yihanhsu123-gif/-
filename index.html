@@ -4173,6 +4173,20 @@ function CRMModule({masters,FS}){
       const targets=byTgt[mid]||[];
       sources.forEach(src=>{
         const matches=[];
+        // 「關係詞」：含這些字眼代表是另一個人，不可合併
+        // 例：「王小明媽媽」「陳小姐朋友」「李大華同事」
+        const RELATION_KEYWORDS=["友","媽","媽媽","媽咪","爸","爸爸","爸比","哥","哥哥","姊","姊姊","弟","妹","老公","老婆","兒子","女兒","同事","老闆","朋友","表哥","表姊","表弟","表妹","堂哥","堂姊","學長","學姐","學弟","學妹","師兄","師姐","親戚","鄰居","客戶","介紹","推薦","小孩","孩子","姪女","姪子","外甥","老師","學生","員工"];
+        const hasRelationKeyword=(a,b)=>{
+          // a, b 已經包含關係，但其中一個多出來的部分是關係詞 → 排除
+          const longer=a.length>=b.length?a:b;
+          const shorter=a.length>=b.length?b:a;
+          if(!longer.includes(shorter))return false;
+          // 把 shorter 從 longer 移除剩餘的部分
+          const remainder=longer.replace(shorter,"").trim();
+          if(!remainder)return false;
+          // 檢查餘下的是否含關係詞
+          return RELATION_KEYWORDS.some(kw=>remainder.includes(kw));
+        };
         targets.forEach(tgt=>{
           const sName=src.name.trim(), tName=tgt.name.trim();
           if(!sName||!tName)return;
@@ -4185,25 +4199,49 @@ function CRMModule({masters,FS}){
           }
           // 包含關係：tgt 包含 src，且 src 至少 2 字、不是單姓
           if(sName.length>=2 && !isSingleSurname(sName) && tName.includes(sName)){
+            // 排除：包含但多出的部分是關係詞（媽/友/同事...）→ 不同人
+            if(hasRelationKeyword(sName,tName))return;
             const sParen=(sName.match(/[（(]([^）)]*)[）)]/)||[])[1]||"";
             const tParen=(tName.match(/[（(]([^）)]*)[）)]/)||[])[1]||"";
             const tag=sParen||tParen?`包含關係 (${sParen||"無"} vs ${tParen||"無"})`:"包含關係";
             matches.push({tgt,reason:tag});return;
           }
-          // 反向包含：src 包含 tgt（少見但保留）
+          // 反向包含：src 包含 tgt
           if(tName.length>=2 && !isSingleSurname(tName) && sName.includes(tName)){
+            if(hasRelationKeyword(sName,tName))return;
             const sParen=(sName.match(/[（(]([^）)]*)[）)]/)||[])[1]||"";
             const tParen=(tName.match(/[（(]([^）)]*)[）)]/)||[])[1]||"";
             const tag=sParen||tParen?`包含關係 (${sParen||"無"} vs ${tParen||"無"})`:"包含關係";
             matches.push({tgt,reason:tag});return;
+          }
+          // r/s/m 後綴推測：黃 s ↔ 黃小姐、黃 r ↔ 黃先生、黃 m ↔ 黃媽媽
+          const expandSuffix=(name)=>{
+            const n=stripParen(name||"").trim();
+            if(!n)return null;
+            const last=n.slice(-1);
+            if(last==="r"||last==="R")return n.slice(0,-1)+"先生";
+            if(last==="s"||last==="S")return n.slice(0,-1)+"小姐";
+            if(last==="m"||last==="M")return n.slice(0,-1)+"媽媽";
+            return null;
+          };
+          const sExpanded=expandSuffix(sName);
+          const tExpanded=expandSuffix(tName);
+          if(sExpanded&&stripParen(tName).trim()===sExpanded){
+            matches.push({tgt,reason:`${sName.slice(-1)}=${sExpanded.slice(-2)}`});return;
+          }
+          if(tExpanded&&stripParen(sName).trim()===tExpanded){
+            matches.push({tgt,reason:`${tName.slice(-1)}=${tExpanded.slice(-2)}`});return;
           }
           // 首字相同 + 後綴/縮寫
           if(sharesPrefix(sName,tName)){
+            // 排除關係詞
+            if(hasRelationKeyword(sName,tName))return;
             matches.push({tgt,reason:"首字相同"});return;
           }
           // 高相似度（編輯距離），如「葉玟」vs「葉玟玟」
           const sim=nameSimilarity(sName,tName);
           if(sim>=0.8){
+            if(hasRelationKeyword(sName,tName))return;
             matches.push({tgt,reason:`相似 ${Math.round(sim*100)}%`});return;
           }
         });
@@ -4605,7 +4643,16 @@ function CRMModule({masters,FS}){
                 {sug.conflict&&<span style={{fontSize:10,padding:"1px 7px",borderRadius:8,background:"rgba(245,166,35,0.15)",color:"#f5a623",fontWeight:700}}>⚠ 多重匹配</span>}
                 <span style={{marginLeft:"auto",fontSize:10,color:"var(--text-dim)"}}>{src.bks.length} 筆預約</span>
               </div>
-              <div style={{fontSize:14,fontWeight:700,color:"var(--text-main)",marginBottom:2}}>「{src.name}」</div>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2,flexWrap:"wrap"}}>
+                <div style={{fontSize:14,fontWeight:700,color:"var(--text-main)"}}>「{src.name}」</div>
+                <button onClick={async()=>{
+                  if(!window.confirm(`忽略「${src.name}」全部 ${sug.candidates.length} 個合併建議？\n\n（30 天後會重新出現）`))return;
+                  for(const c of sug.candidates){
+                    await doIgnoreMerge(src,c.tgt);
+                  }
+                  msgCrm(`已忽略「${src.name}」全部 ${sug.candidates.length} 個建議`);
+                }} style={{padding:"3px 10px",borderRadius:6,border:"1px solid #f5a623",background:"transparent",color:"#f5a623",fontSize:11,fontWeight:700,cursor:"pointer"}}>✗ 全部忽略</button>
+              </div>
               <div style={{fontSize:11,color:"var(--text-dim)",marginBottom:10}}>無電話 · 最近 {src.lastDate}</div>
               <div style={{paddingLeft:8,borderLeft:"2px solid var(--border2)",display:"flex",flexDirection:"column",gap:8}}>
                 {sug.candidates.map((c,ci)=>{
