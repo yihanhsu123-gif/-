@@ -4024,6 +4024,20 @@ function CRMModule({masters,FS}){
       return b;
     });
 
+    // 計算名字「資訊量」分數：含括號 / 中文標籤 / 較長 → 更具識別度，優先保留
+    const nameScore=(n)=>{
+      if(!n)return-1;
+      let s=n.length;
+      if(/[（(].+[）)]/.test(n))s+=10; // 含括號內容（如「黃S（脆）」）
+      if(/[媽爸哥姊弟妹姨叔伯舅嬸娘伯母嫂阿]/.test(n))s+=5; // 含親屬稱謂（更具識別度）
+      if(/[a-zA-Z]/.test(n))s+=3; // 含英文（如 Wilson）
+      // 純「姓+先生/小姐/媽媽」這種泛稱降低分數
+      if(/^.{1}(先生|小姐|媽媽|爸爸|太太)$/.test(n))s-=20;
+      // 純「姓+r/s/m」也降分
+      if(/^.{1}[rRsSmM]$/.test(n))s-=15;
+      return s;
+    };
+    
     // 第二步：以「師傅+電話」為主鍵建立 map
     const phoneMap={};
     const map={};
@@ -4031,7 +4045,7 @@ function CRMModule({masters,FS}){
       if(!b._phone)return;
       const k=`${b.master_id}__${b._phone}`;
       if(!map[k])map[k]={key:k,masterId:b.master_id,masterName:masters.find(x=>x.id===b.master_id)?.name||"?",phone:b._phone,name:b._name,bks:[],isNew:false};
-      else if(b._name&&b._name.length>map[k].name.length)map[k].name=b._name;
+      else if(b._name&&nameScore(b._name)>nameScore(map[k].name))map[k].name=b._name;
       phoneMap[`${b.master_id}__${b._name}`]=k;
       map[k].bks.push(b);
       if(b.color_tag==="new_customer")map[k].isNew=true;
@@ -4145,23 +4159,15 @@ function CRMModule({masters,FS}){
     if(maxLen<=1)return a===b?1:0;
     return 1-levenshtein(a,b)/maxLen;
   };
-  // 首字相同 + 帶 r/s/m/媽/姐/姨 等後綴的可能同一人
-  const SUFFIX_TAGS=["r","R","s","S","m","M","媽","姐","姨","哥","姊","母","爸","父","妹","弟","兒"];
+  // 共有連續 N 字以上才視為相關（避免「謝媽」「謝 S」這種只有姓相同的誤判）
   const sharesPrefix=(a,b)=>{
     a=stripParen(a||"").trim();b=stripParen(b||"").trim();
     if(!a||!b||a===b)return false;
-    if(a[0]!==b[0])return false;
-    // 兩個都有 1~2 字 + 可能帶後綴
-    const stripSuffix=(s)=>{
-      let x=s;
-      for(const sfx of SUFFIX_TAGS){if(x.endsWith(sfx))x=x.slice(0,-sfx.length);}
-      return x;
-    };
-    const a2=stripSuffix(a),b2=stripSuffix(b);
-    // 去後綴後若至少一邊縮成 1 字、且首字相同，視為相似
-    if(a2.length<=1||b2.length<=1)return a[0]===b[0];
-    // 否則檢查相似度
-    return nameSimilarity(a,b)>=0.5;
+    // 計算前綴的相同字數
+    let common=0;
+    while(common<a.length&&common<b.length&&a[common]===b[common])common++;
+    // 至少 2 個字相同才算相關（避免單姓誤判）
+    return common>=2;
   };
 
   // 對照建議：每筆 = {sourceCard, targetCard, reason}
@@ -4263,11 +4269,11 @@ function CRMModule({masters,FS}){
           if(tExpanded&&stripParen(sName).trim()===tExpanded){
             matches.push({tgt,reason:`${tName.slice(-1)}=${tExpanded.slice(-2)}`});return;
           }
-          // 首字相同 + 後綴/縮寫
+          // 至少 2 字共同前綴才算相關
           if(sharesPrefix(sName,tName)){
             // 排除關係詞
             if(hasRelationKeyword(sName,tName))return;
-            matches.push({tgt,reason:"首字相同"});return;
+            matches.push({tgt,reason:"前2字相同"});return;
           }
           // 高相似度（編輯距離），如「葉玟」vs「葉玟玟」
           const sim=nameSimilarity(sName,tName);
@@ -4291,28 +4297,48 @@ function CRMModule({masters,FS}){
   const doMerge=async(sourceCard,targetCard)=>{
     const procKey=`${sourceCard.key}__${targetCard.key}`;
     if(mergeProcessing[procKey])return;
-    if(!window.confirm(`確定把「${sourceCard.name}」(${sourceCard.bks.length}筆預約) 合併進「${targetCard.name}」(${targetCard.phone}) 嗎？\n\n動作：所有預約會補上電話 ${targetCard.phone}。`))return;
+    // 決定合併後保留的名字：分數高的優先（含括號/英文/標籤的更具識別度）
+    const nameScoreSimple=(n)=>{
+      if(!n)return-1;
+      let s=n.length;
+      if(/[（(].+[）)]/.test(n))s+=10;
+      if(/[媽爸哥姊弟妹姨叔伯舅嬸娘伯母嫂阿]/.test(n))s+=5;
+      if(/[a-zA-Z]/.test(n))s+=3;
+      if(/^.{1}(先生|小姐|媽媽|爸爸|太太)$/.test(n))s-=20;
+      if(/^.{1}[rRsSmM]$/.test(n))s-=15;
+      return s;
+    };
+    const finalName=nameScoreSimple(sourceCard.name)>=nameScoreSimple(targetCard.name)?sourceCard.name:targetCard.name;
+    if(!window.confirm(`確定把「${sourceCard.name}」(${sourceCard.bks.length}筆預約) 合併進「${targetCard.name}」(${targetCard.phone}) 嗎？\n\n動作：所有預約會補上電話 ${targetCard.phone}\n保留名字：${finalName}`))return;
     setMergeProcessing(p=>({...p,[procKey]:true}));
     try{
       const ids=sourceCard.bks.map(b=>b.id).filter(Boolean);
-      // 分批 update
+      // 分批 update（補電話 + 統一名字）
       const chunkSize=100;
       let okCount=0,failCount=0;
       for(let i=0;i<ids.length;i+=chunkSize){
         const chunk=ids.slice(i,i+chunkSize);
-        const{error}=await sb.from("bookings").update({customer_phone:targetCard.phone}).in("id",chunk);
+        const{error}=await sb.from("bookings").update({customer_phone:targetCard.phone,customer_name:finalName}).in("id",chunk);
         if(error)failCount+=chunk.length; else okCount+=chunk.length;
       }
-      // 更新 customers 主檔（補入這個名字當「曾用名」是靠 bookings 動態算的，所以只要 phone 對上就會自動出現）
-      // 這裡順便確保 customers 表有這位
+      // 也更新 target 的所有預約（如果 target 名字跟 finalName 不同）
+      if(targetCard.name!==finalName){
+        const tgtIds=targetCard.bks.map(b=>b.id).filter(Boolean);
+        for(let i=0;i<tgtIds.length;i+=chunkSize){
+          const chunk=tgtIds.slice(i,i+chunkSize);
+          await sb.from("bookings").update({customer_name:finalName}).in("id",chunk);
+        }
+      }
+      // customers 主檔也用 finalName
       try{
-        await sb.from("customers").upsert({phone:targetCard.phone,name:targetCard.name},{onConflict:"phone",ignoreDuplicates:true});
+        await sb.from("customers").upsert({phone:targetCard.phone,name:finalName},{onConflict:"phone",ignoreDuplicates:false});
       }catch{}
       // 本地更新 bks
-      setBks(prev=>prev.map(b=>ids.includes(b.id)?{...b,customer_phone:targetCard.phone}:b));
-      if(failCount===0)msgCrm(`✅ 已合併 ${okCount} 筆預約到「${targetCard.name}」`);
+      const allIds=[...ids,...(targetCard.name!==finalName?targetCard.bks.map(b=>b.id).filter(Boolean):[])];
+      setBks(prev=>prev.map(b=>allIds.includes(b.id)?{...b,customer_phone:targetCard.phone,customer_name:finalName}:b));
+      if(failCount===0)msgCrm(`✅ 已合併 ${okCount} 筆預約，名字統一為「${finalName}」`);
       else msgCrm(`⚠️ 合併完成：成功 ${okCount}、失敗 ${failCount}`,true);
-      try{window.dispatchEvent(new CustomEvent("yp:bookings_changed",{detail:{ids,merged:true}}));}catch(_){}
+      try{window.dispatchEvent(new CustomEvent("yp:bookings_changed",{detail:{ids:allIds,merged:true}}));}catch(_){}
     }catch(e){
       msgCrm("合併失敗，請重試",true);
     }
