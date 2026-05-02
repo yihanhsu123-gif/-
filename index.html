@@ -346,7 +346,16 @@ function parseInput(s){
   const name=(m[1]+(m[3]||"")).replace(/^[\s()【】\[\]『』「」]+|[\s()【】\[\]『』「」]+$/g,"").trim();
   return{name,phone:m[2]};
 }
-function displayName(n){if(!n)return"";const m=n.trim().match(/^([^0-9]+?)([0-9R][0-9]{3,}).*/);return m?m[1].trim():n.trim();}
+function displayName(n){
+  if(!n)return"";
+  const t=n.trim();
+  // 1. 開頭數字 + 後面是名字格式（罕見但保留）：「[0-9R][0-9]{3,}.*名字」
+  const m=t.match(/^([^0-9]+?)([0-9R][0-9]{3,}).*/);
+  if(m)return m[1].trim();
+  // 2. 結尾含「-數字-數字」「 數字」這類電話殘段：「林s -632-896」→ 林s
+  const cleaned=t.replace(/[\s\-\u2010-\u2015\u2212.()]*\d[\d\s\-\u2010-\u2015\u2212.()]{3,}\s*$/,"").trim();
+  return cleaned||t;
+}
 function getWeeksMon(y,m,showSun){
   const dim=new Date(y,m+1,0).getDate();
   const off=new Date(y,m,1).getDay();
@@ -4001,8 +4010,10 @@ function CRMModule({masters,FS}){
         if(p.phone){phone=p.phone;}
         if(!phone){const pm=b.raw_input.match(/(\d{4,})\s*$/);if(pm)phone=pm[1];}
       }
-      // 最終確保 name 不含尾巴的數字電話
-      const cleanedName=displayName(name)||name;
+      // 最終確保 name 不含尾巴的數字電話（即使已經有 phone，也要清 name 內殘留的數字）
+      let cleanedName=displayName(name)||name;
+      // 額外清理：名字結尾若含 4+ 位數字（含分隔符如「-632-896」），移除
+      cleanedName=cleanedName.replace(/[\s\-\u2010-\u2015\u2212.()]*\d[\d\s\-\u2010-\u2015\u2212.()]{3,}\s*$/,"").trim();
       return{...b,_phone:phone,_name:cleanedName};
     });
 
