@@ -1220,18 +1220,8 @@ function MainApp({authMaster,onLogout}){
     };
   },[]);
   
-  // 休假模式時禁用整頁觸控（避免拖曳時頁面捲動/縮放）
-  useEffect(()=>{
-    if(dragMode){
-      const prev=document.body.style.touchAction;
-      document.body.style.touchAction="none";
-      document.body.style.userSelect="none";
-      return ()=>{
-        document.body.style.touchAction=prev||"";
-        document.body.style.userSelect="";
-      };
-    }
-  },[dragMode]);
+  // 休假模式時禁用整頁觸控（已移除 — 改用 e.preventDefault() 在拖曳事件處理）
+  // useEffect(()=>{...},[dragMode]);
   const dragOverRef=useRef(null);
   const[isDragActive,setIsDragActive]=useState(false);
   const longPressTimer=useRef(null);
@@ -3913,6 +3903,9 @@ function CRMModule({masters,FS}){
   const[renameModal,setRenameModal]=useState(false);
   const[renameNew,setRenameNew]=useState("");
   const[renameSaving,setRenameSaving]=useState(false);
+  const[phoneModal,setPhoneModal]=useState(false);
+  const[phoneNew,setPhoneNew]=useState("");
+  const[phoneSaving,setPhoneSaving]=useState(false);
   const[crmToast,setCrmToast]=useState(null);
   const msgCrm=(m,err)=>{setCrmToast({m,err});setTimeout(()=>setCrmToast(null),2800);};
 
@@ -3920,6 +3913,13 @@ function CRMModule({masters,FS}){
   useModalBackClose(!!sel,React.useCallback(()=>setSel(null),[]));
   useModalBackClose(!!noShowEdit,React.useCallback(()=>setNoShowEdit(null),[]));
   useModalBackClose(renameModal,React.useCallback(()=>setRenameModal(false),[]));
+  useModalBackClose(phoneModal,React.useCallback(()=>setPhoneModal(false),[]));
+  
+  // 保險：CRM 掛載時清掉可能殘留的 body 樣式（休假模式遺留）
+  useEffect(()=>{
+    document.body.style.touchAction="";
+    document.body.style.userSelect="";
+  },[]);
 
   const reloadNoShow=async()=>{
     let ns=[],from=0;
@@ -4418,6 +4418,36 @@ function CRMModule({masters,FS}){
     }
   };
 
+  // 儲存電話
+  const doSavePhone=async()=>{
+    const newPhone=phoneNew.trim().replace(/\s+/g,"");
+    if(phoneSaving)return;
+    if(newPhone&&!/^\d+$/.test(newPhone)){msgCrm("電話只能輸入數字",true);return;}
+    setPhoneSaving(true);
+    const ids=sel.bks.map(b=>b.id);
+    let updated=0,failed=0;
+    const chunkSize=100;
+    for(let i=0;i<ids.length;i+=chunkSize){
+      const chunk=ids.slice(i,i+chunkSize);
+      const{error}=await sb.from("bookings").update({customer_phone:newPhone||null}).in("id",chunk);
+      if(error)failed+=chunk.length;else updated+=chunk.length;
+    }
+    // 同步更新 customers 表
+    if(newPhone){
+      try{await sb.from("customers").upsert({phone:newPhone,name:sel.name},{onConflict:"phone",ignoreDuplicates:false});}catch{}
+    }
+    setPhoneSaving(false);
+    if(failed===0){
+      msgCrm(`✅ 已將 ${updated} 筆預約的電話更新為「${newPhone||"無"}」`);
+      setBks(prev=>prev.map(b=>ids.includes(b.id)?{...b,customer_phone:newPhone||null}:b));
+      setPhoneModal(false);setPhoneNew("");
+      setSel(null);
+      try{window.dispatchEvent(new CustomEvent("yp:bookings_changed",{detail:{ids,newPhone}}));}catch(_){}
+    }else{
+      msgCrm(`⚠️ 部分失敗（${failed}筆），請重試`,true);
+    }
+  };
+
   if(loading)return<div style={{padding:20,textAlign:"center",color:"var(--text-dim)"}}>⏳ 載入客戶資料...</div>;
 
   // ── 客戶詳情頁 ──
@@ -4470,9 +4500,15 @@ function CRMModule({masters,FS}){
                     return nameMatch?.customer_phone||null;
                   })();
                   const resolvedPhone=directPhone||allBksPhone;
-                  return resolvedPhone?
-                    <div style={{fontSize:13,color:"var(--text-muted)"}}>📞 {resolvedPhone}</div>:
-                    <div style={{fontSize:13,color:"var(--text-dim)"}}>📞 未留電話</div>;
+                  return(
+                    <div style={{fontSize:13,color:resolvedPhone?"var(--text-muted)":"var(--text-dim)",display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                      <span>📞 {resolvedPhone||"未留電話"}</span>
+                      <button onClick={()=>{setPhoneNew(resolvedPhone||"");setPhoneModal(true);}}
+                        style={{padding:"2px 9px",background:"rgba(116,185,255,0.15)",border:"1px solid rgba(116,185,255,0.4)",borderRadius:7,color:"#74b9ff",fontSize:11,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
+                        ✏️ 編輯
+                      </button>
+                    </div>
+                  );
                 })()}
                 {(()=>{
                   // Use resolved phone for LINE lookup
@@ -4605,6 +4641,28 @@ function CRMModule({masters,FS}){
               <button onClick={doRename} disabled={renameSaving||!renameNew.trim()||renameNew.trim()===sel.name}
                 style={{flex:2,padding:"11px",borderRadius:10,background:renameSaving||!renameNew.trim()||renameNew.trim()===sel.name?"#333":"#74b9ff",border:"none",color:renameSaving||!renameNew.trim()||renameNew.trim()===sel.name?"#666":"#fff",fontSize:13,fontWeight:700,cursor:renameSaving?"wait":"pointer",transition:"all 0.15s"}}>
                 {renameSaving?"改名中...":"✓ 確認改名"}
+              </button>
+            </div>
+          </div>
+        </div>}
+
+        {/* 編輯電話 Modal */}
+        {phoneModal&&<div data-modal-backdrop="true" style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:300,padding:"0 20px"}} onClick={()=>{if(!phoneSaving){setPhoneModal(false);setPhoneNew("");}}}>
+          <div style={{background:"var(--bg-header)",border:"1px solid var(--border2)",borderRadius:18,padding:22,width:"100%",maxWidth:400}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontWeight:800,fontSize:16,marginBottom:4,color:"#74b9ff"}}>📞 編輯電話</div>
+            <div style={{fontSize:12,color:"var(--text-dim)",marginBottom:16}}>將會更新「{sel.name}」所有預約的電話（共 {sel.bks.length} 筆）</div>
+            <div style={{marginBottom:14}}>
+              <div style={{fontSize:11,color:"var(--text-dim)",marginBottom:5,fontWeight:600}}>新電話</div>
+              <input autoFocus type="tel" inputMode="numeric" value={phoneNew} onChange={e=>setPhoneNew(e.target.value)} onKeyDown={e=>e.key==="Enter"&&doSavePhone()} placeholder="輸入電話號碼（留空為清除）..."
+                style={{width:"100%",padding:"10px 13px",background:"var(--input-bg)",border:"2px solid #74b9ff",borderRadius:10,fontSize:15,color:"var(--text-main)",outline:"none",boxSizing:"border-box"}} />
+              <div style={{fontSize:10,color:"var(--text-dim)",marginTop:5}}>留空即可清除電話</div>
+            </div>
+            <div style={{display:"flex",gap:8,marginTop:16}}>
+              <button onClick={()=>{if(!phoneSaving){setPhoneModal(false);setPhoneNew("");}}} disabled={phoneSaving}
+                style={{flex:1,padding:"11px",borderRadius:10,border:"1px solid var(--border2)",background:"transparent",color:"var(--text-muted)",fontSize:13,cursor:"pointer"}}>取消</button>
+              <button onClick={doSavePhone} disabled={phoneSaving}
+                style={{flex:2,padding:"11px",borderRadius:10,background:phoneSaving?"#333":"#74b9ff",border:"none",color:phoneSaving?"#666":"#fff",fontSize:13,fontWeight:700,cursor:phoneSaving?"wait":"pointer"}}>
+                {phoneSaving?"儲存中...":"✓ 確認"}
               </button>
             </div>
           </div>
