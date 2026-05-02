@@ -19,15 +19,7 @@
   --vv-width:100vw; --vv-height:100vh;
   --vv-scale:1;
 }
-/* Modal backdrop 自動跟著 visualViewport，pinch-zoom 時彈窗會在縮放後的可視區域內 */
-[data-modal-backdrop]{
-  position:fixed !important;
-  top:var(--vv-top) !important;
-  left:var(--vv-left) !important;
-  width:var(--vv-width) !important;
-  height:var(--vv-height) !important;
-  inset:auto !important;
-}
+/* Modal backdrop 不再強制跟 visualViewport（鍵盤升起時會跑掉），讓 React 元件自己用 fixed inset:0 */
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: 'Noto Sans TC', sans-serif; font-size: 14px; -webkit-text-size-adjust: 100%; overflow: hidden; background: var(--bg-main); color: var(--text-main); touch-action: pan-x pan-y pinch-zoom; }
 input, select, button, textarea { font-family: inherit; outline: none; }
@@ -125,24 +117,7 @@ function useModalBackClose(isOpen,onClose){
   },[isOpen,onClose]);
 }
 
-// 監聽 visualViewport 變動，把目前縮放/位置寫入 CSS 變數
-// 所有 modal 都可以用 var(--vv-top) var(--vv-left) var(--vv-width) var(--vv-height) 自動跟隨
-// 這樣使用者 pinch-zoom 時，彈窗會跟著縮放後的視覺視窗一起移動和變大變小
-(function setupVisualViewportTracking(){
-  if(typeof window==="undefined"||!window.visualViewport)return;
-  const v=window.visualViewport;
-  const update=()=>{
-    const r=document.documentElement.style;
-    r.setProperty("--vv-top",`${v.offsetTop}px`);
-    r.setProperty("--vv-left",`${v.offsetLeft}px`);
-    r.setProperty("--vv-width",`${v.width}px`);
-    r.setProperty("--vv-height",`${v.height}px`);
-    r.setProperty("--vv-scale",`${v.scale}`);
-  };
-  update();
-  v.addEventListener("resize",update);
-  v.addEventListener("scroll",update);
-})();
+// visualViewport tracking 已移除（鍵盤升起時造成 modal 位置錯亂）
 
 function getTaipeiNow(){const t=new Date();const s=t.toLocaleString("en-US",{timeZone:"Asia/Taipei",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false});const[date,time]=s.split(", ");const[mo,dy,yr]=date.split("/");const[h,mi,sc]=(time||"00:00:00").split(":");return new Date(+yr,+mo-1,+dy,+h,+mi,+sc);}
 function getTaipeiDateStr(){const t=getTaipeiNow();return `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,"0")}-${String(t.getDate()).padStart(2,"0")}`;}
