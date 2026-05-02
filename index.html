@@ -4185,11 +4185,17 @@ function CRMModule({masters,FS}){
           }
           // 包含關係：tgt 包含 src，且 src 至少 2 字、不是單姓
           if(sName.length>=2 && !isSingleSurname(sName) && tName.includes(sName)){
-            matches.push({tgt,reason:"包含關係"});return;
+            const sParen=(sName.match(/[（(]([^）)]*)[）)]/)||[])[1]||"";
+            const tParen=(tName.match(/[（(]([^）)]*)[）)]/)||[])[1]||"";
+            const tag=sParen||tParen?`包含關係 (${sParen||"無"} vs ${tParen||"無"})`:"包含關係";
+            matches.push({tgt,reason:tag});return;
           }
           // 反向包含：src 包含 tgt（少見但保留）
           if(tName.length>=2 && !isSingleSurname(tName) && sName.includes(tName)){
-            matches.push({tgt,reason:"包含關係"});return;
+            const sParen=(sName.match(/[（(]([^）)]*)[）)]/)||[])[1]||"";
+            const tParen=(tName.match(/[（(]([^）)]*)[）)]/)||[])[1]||"";
+            const tag=sParen||tParen?`包含關係 (${sParen||"無"} vs ${tParen||"無"})`:"包含關係";
+            matches.push({tgt,reason:tag});return;
           }
           // 首字相同 + 後綴/縮寫
           if(sharesPrefix(sName,tName)){
